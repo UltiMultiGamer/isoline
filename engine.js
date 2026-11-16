@@ -1,0 +1,597 @@
+(function (root) {
+  "use strict";
+
+  const PATTERNS = [
+    { id: "blobs", label: "Blobs" }, { id: "terrain", label: "Terrain" }, { id: "flow", label: "Flow" },
+    { id: "rings", label: "Rings", linear: true }, { id: "ridges", label: "Ridges" }, { id: "dunes", label: "Dunes" },
+    { id: "lines", label: "Lines", linear: true }, { id: "strata", label: "Strata", linear: true }, { id: "waves", label: "Waves", linear: true },
+  ];
+  const LINEAR = new Set(PATTERNS.filter((p) => p.linear).map((p) => p.id));
+  const ANGLED = new Set(["flow", "dunes", "lines", "strata", "waves"]);
+
+  function mulberry32(a) {
+    return () => {
+      a |= 0; a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  function makeNoise(seed) {
+    const rand = mulberry32(seed);
+    const p = new Uint8Array(256);
+    for (let i = 0; i < 256; i++) p[i] = i;
+    for (let i = 255; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [p[i], p[j]] = [p[j], p[i]]; }
+    const perm = new Uint8Array(512);
+    for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
+    const gx = [1, -1, 1, -1, 1, -1, 0, 0], gy = [1, 1, -1, -1, 0, 0, 1, -1];
+    const F2 = 0.5 * (Math.sqrt(3) - 1), G2 = (3 - Math.sqrt(3)) / 6;
+    return (xin, yin) => {
+      const s = (xin + yin) * F2;
+      const i = Math.floor(xin + s), j = Math.floor(yin + s);
+      const t = (i + j) * G2;
+      const x0 = xin - (i - t), y0 = yin - (j - t);
+      const i1 = x0 > y0 ? 1 : 0, j1 = 1 - i1;
+      const x1 = x0 - i1 + G2, y1 = y0 - j1 + G2;
+      const x2 = x0 - 1 + 2 * G2, y2 = y0 - 1 + 2 * G2;
+      const ii = i & 255, jj = j & 255;
+      let n = 0, tt, g;
+      tt = 0.5 - x0 * x0 - y0 * y0;
+      if (tt > 0) { g = perm[ii + perm[jj]] & 7; tt *= tt; n += tt * tt * (gx[g] * x0 + gy[g] * y0); }
+      tt = 0.5 - x1 * x1 - y1 * y1;
+      if (tt > 0) { g = perm[ii + i1 + perm[jj + j1]] & 7; tt *= tt; n += tt * tt * (gx[g] * x1 + gy[g] * y1); }
+      tt = 0.5 - x2 * x2 - y2 * y2;
+      if (tt > 0) { g = perm[ii + 1 + perm[jj + 1]] & 7; tt *= tt; n += tt * tt * (gx[g] * x2 + gy[g] * y2); }
+      return 70 * n;
+    };
+  }
+
+  const rangeCache = new Map();
+  function rangeSpec(s, w, h, k = 1) {
+    const M = Math.max(0.3 * Math.max(w, h), (s.driftR || 0) * k + 1), W = w + 2 * M, H = h + 2 * M;
+    const mx = 96, my = Math.max(2, Math.round((mx * H) / W));
+    const m = s.motion || {}, a = m.amt ?? 0.5, a0 = m.seed ? ((m.seed * 0.6180339887) % 1) * 2 * Math.PI : 0;
+    const R = m.type === "breathe" ? 0.45 * a : m.type === "pulse" ? 0.5 * a : 0;
+    const ring = (r, ph) => Array.from({ length: 6 }, (_, i) => [r * Math.cos(a0 + ph + (i * Math.PI) / 3), r * Math.sin(a0 + ph + (i * Math.PI) / 3)]);
+    const along = m.unbound ? [3, 7, 12].map((d) => [0.8 * d * R + R, 0.6 * d * R]) : [];
+    const path = m.endless && m.type === "breathe" ? "orbit" : m.path || "orbit", th = ((m.angle ?? 30) * Math.PI) / 180, L = path === "glide" ? 2 * R : R;
+    const line = Array.from({ length: 7 }, (_, i) => [-Math.cos(th) * L * (i / 3 - 1), Math.sin(th) * L * (i / 3 - 1)]);
+    const loops = R > 0 ? (m.endless && m.type === "breathe" ? [...ring(1.8 * R, 0), ...ring(0.6 * R, Math.PI / 6), ...along] : path === "orbit" ? ring(R, 0) : line) : [[0, 0]];
+    return { M, mx, my, cx: W / (mx - 1), cy: H / (my - 1), loops, pad: m.unbound && m.endless && m.type === "breathe" ? 0.06 : 0.03 };
+  }
+  function buildField(s, w, h, res) {
+    const cols = Math.max(2, Math.round(w / res)), rows = Math.max(2, Math.round(h / res));
+    const sx = w / cols, sy = h / rows, nx = cols + 1, ny = rows + 1;
+    const f = new Float32Array(nx * ny);
+    const k = w / s.w, sc = Math.max(4, s.scale * k), oct = s.octaves;
+    const noise = makeNoise(s.seed);
+    const rand = mulberry32(s.seed ^ 0x9e3779b9);
+    const fbm = (x, y, o) => {
+      let a = 1, q = 1, sum = 0, norm = 0;
+      for (let i = 0; i < o; i++) { sum += a * noise(x * q, y * q); norm += a; a *= 0.5; q *= 2.03; }
+      return sum / norm;
+    };
+    const ridged = (x, y, o) => {
+      let a = 1, q = 1, sum = 0, norm = 0;
+      for (let i = 0; i < o; i++) { const r = 1 - Math.abs(noise(x * q, y * q)); sum += a * r * r; norm += a; a *= 0.5; q *= 2.03; }
+      return sum / norm;
+    };
+
+    const feats = [], auto = [];
+    for (let i = 0; i < 24; i++) {
+      const r = s.bumpSize * k * (0.6 + rand() * 0.8);
+      feats.push({ x: rand() * w, y: rand() * h, R: r, s: (0.7 + rand() * 0.6) * (rand() < 0.3 ? -1 : 1) });
+      auto.push({ x: (0.08 + rand() * 0.84) * w, y: (0.08 + rand() * 0.84) * h, R: (0.25 + rand() * 0.45) * sc, s: 0.6 + rand() * 0.6 });
+    }
+    feats.length = Math.min(feats.length, s.features);
+    auto.length = Math.min(auto.length, Math.max(1, s.features));
+
+    const pts = s.usePoints && s.points ? s.points.map((p) => ({ x: p.x * w, y: p.y * h, R: Math.max(2, p.r * k), s: p.s })) : [];
+    const src = pts.length ? pts : auto;
+    const P = Math.max(0.3, s.falloff);
+    const fall = (d2, R) => Math.pow(1 + d2 / (R * R * P), -P);
+    const pointSum = (x, y, list, px) => {
+      let v = 0;
+      for (const p of list) { const dx = x - p.x, dy = y - p.y; v += p.s * (px ? p.R : 1) * fall(dx * dx + dy * dy, p.R); }
+      return v;
+    };
+    const ang = ((s.angle + 90) * Math.PI) / 180, ca = Math.cos(ang), sa = Math.sin(ang);
+    const driftX = (s.driftX || 0) * k, driftY = (s.driftY || 0) * k;
+    const smk = 40 * k;
+    let lx = s.loopX || 0, ly = s.loopY || 0;
+
+    const valAt = (px, py) => {
+        if (s.liquify > 0) {
+          const ls = Math.max(4, sc * (s.liqScale || 1)), u0 = px / ls, v0 = py / ls;
+          const qx = noise(u0 + 1.3, v0 + 7.1), qy = noise(u0 + 8.2, v0 + 2.8);
+          px += s.liquify * ls * 0.06 * noise(u0 + 1.2 * qx + 4.7, v0 + 1.2 * qy + 1.9);
+          py += s.liquify * ls * 0.06 * noise(u0 + 1.2 * qx + 9.2, v0 + 1.2 * qy + 5.3);
+        }
+        if (s.warp > 0) {
+          const u0 = px / sc, v0 = py / sc;
+          px += s.warp * sc * 0.5 * fbm(u0 + 5.2 + lx, v0 + 1.3 + ly, 2);
+          py += s.warp * sc * 0.5 * fbm(u0 + 1.7 - ly, v0 + 9.2 + lx, 2);
+        }
+        const u = px / sc, v = py / sc;
+        let val;
+        switch (s.pattern) {
+          case "blobs":
+            val = pointSum(px, py, src, false) + (oct > 1 ? 0.06 * fbm(u, v, oct - 1) : 0);
+            break;
+          case "terrain": val = fbm(u, v, oct) + 0.8 * pointSum(px, py, pts, false); break;
+          case "ridges": val = ridged(u, v, oct) + 0.6 * pointSum(px, py, pts, false); break;
+          case "flow":
+            val = Math.sin((u * ca + v * sa) * 2.4 + fbm(u * 0.45, v * 0.45, oct) * 2.2) + pointSum(px, py, pts, false);
+            break;
+          case "dunes":
+            val = 1 - Math.abs(Math.sin((u * ca + v * sa) * 1.6 + s.bump * 1.2 * fbm(u * 0.4, v * 0.4, oct))) + 0.6 * pointSum(px, py, pts, false);
+            break;
+          case "lines": val = px * ca + py * sa + pointSum(px, py, pts, true); break;
+          case "strata": {
+            val = px * ca + py * sa + pointSum(px, py, pts, true);
+            for (const ft of feats) {
+              const dx = px - ft.x, dy = py - ft.y;
+              val += s.bump * ft.s * ft.R * Math.exp(-(dx * dx + dy * dy) / (2 * ft.R * ft.R));
+            }
+            break;
+          }
+          case "waves": val = px * ca + py * sa + s.bump * sc * 0.35 * fbm(u * 0.5, v * 0.5, oct) + pointSum(px, py, pts, true); break;
+          case "rings": {
+            let acc = 0;
+            for (const p of src) acc += Math.exp(-Math.hypot(px - p.x, py - p.y) / Math.max(0.15, Math.abs(p.s)) / smk);
+            val = -smk * Math.log(acc + 1e-300);
+            break;
+          }
+          default: val = fbm(u, v, oct);
+        }
+        return val;
+    };
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) f[j * nx + i] = valAt(i * sx + driftX, j * sy + driftY);
+    const R = rangeSpec(s, w, h, k), key = JSON.stringify([s.seed, s.pattern, s.scale, s.octaves, s.warp, s.liquify, s.liqScale, s.angle, s.bump, s.bumpSize, s.features, s.falloff, s.usePoints && s.points, w, h, R.loops]);
+    let mm = rangeCache.get(key);
+    if (!mm) {
+      let lo = Infinity, hi = -Infinity;
+      for (const [ax, ay] of R.loops) {
+        lx = ax; ly = ay;
+        for (let j = 0; j < R.my; j++) for (let i = 0; i < R.mx; i++) { const v = valAt(-R.M + i * R.cx, -R.M + j * R.cy); if (v < lo) lo = v; if (v > hi) hi = v; }
+      }
+      const pad = (hi - lo) * R.pad;
+      mm = [lo - pad, hi + pad];
+      if (rangeCache.size > 24) rangeCache.clear();
+      rangeCache.set(key, mm);
+    }
+    if (s.glideW != null) {
+      const t = s.glideW, wb = t * t * (3 - 2 * t), dx2 = (s.driftX2 ?? s.driftX ?? 0) * k, dy2 = (s.driftY2 ?? s.driftY ?? 0) * k;
+      const mid = 0.5 * (mm[0] + mm[1]), g = LINEAR.has(s.pattern) ? 1 : 1 / Math.hypot(1 - wb, wb);
+      lx = s.loopX2 ?? s.loopX ?? 0; ly = s.loopY2 ?? s.loopY ?? 0;
+      for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { const n = j * nx + i; f[n] = mid + (f[n] + wb * (valAt(i * sx + dx2, j * sy + dy2) - f[n]) - mid) * g; }
+    }
+    return { f, nx, ny, cols, rows, sx, sy, min: mm[0], max: mm[1] };
+  }
+
+  const BUCKETS = 1024;
+  function cellIndex(field) {
+    if (field._idx) return field._idx;
+    const { f, nx, cols, rows, min, max } = field, bw = (max - min) / BUCKETS || 1;
+    const bi = (v) => Math.max(0, Math.min(BUCKETS - 1, Math.floor((v - min) / bw)));
+    const n = cols * rows, b0 = new Int16Array(n), b1 = new Int16Array(n), count = new Int32Array(BUCKETS + 1);
+    for (let j = 0, c = 0; j < rows; j++) for (let i = 0; i < cols; i++, c++) {
+      const a = f[j * nx + i], b = f[j * nx + i + 1], d = f[(j + 1) * nx + i], e = f[(j + 1) * nx + i + 1];
+      const lo = Math.min(a, b, d, e), hi = Math.max(a, b, d, e);
+      if (hi < min || lo > max || lo === hi) { b0[c] = 1; b1[c] = 0; continue; }
+      b0[c] = bi(lo); b1[c] = bi(hi);
+      for (let k = b0[c]; k <= b1[c]; k++) count[k + 1]++;
+    }
+    for (let k = 0; k < BUCKETS; k++) count[k + 1] += count[k];
+    const cells = new Int32Array(count[BUCKETS]), at = count.slice(0, BUCKETS);
+    for (let c = 0; c < n; c++) for (let k = b0[c]; k <= b1[c]; k++) cells[at[k]++] = c;
+    return (field._idx = { cells, start: count, bi });
+  }
+  function contour(field, t) {
+    const { f, nx, cols, rows, sx, sy, ox = 0, oy = 0 } = field;
+    const idx = cellIndex(field), bk = idx.bi(t);
+    const pts = new Map(), adj = new Map();
+    const lerp = (a, b) => (b === a ? 0.5 : (t - a) / (b - a));
+    const hKey = (i, j) => (j * nx + i) * 2, vKey = (i, j) => (j * nx + i) * 2 + 1;
+    const link = (a, b) => {
+      let la = adj.get(a); if (!la) adj.set(a, (la = [])); la.push(b);
+      let lb = adj.get(b); if (!lb) adj.set(b, (lb = [])); lb.push(a);
+    };
+    for (let q = idx.start[bk], qe = idx.start[bk + 1]; q < qe; q++) {
+      {
+        const cell = idx.cells[q], j = (cell / cols) | 0, i = cell - j * cols;
+        const tl = f[j * nx + i], tr = f[j * nx + i + 1], br = f[(j + 1) * nx + i + 1], bl = f[(j + 1) * nx + i];
+        const c = (tl > t ? 8 : 0) | (tr > t ? 4 : 0) | (br > t ? 2 : 0) | (bl > t ? 1 : 0);
+        if (c === 0 || c === 15) continue;
+        const x0 = i * sx + ox, y0 = j * sy + oy;
+        const T = () => { const k = hKey(i, j); if (!pts.has(k)) pts.set(k, [x0 + sx * lerp(tl, tr), y0]); return k; };
+        const B = () => { const k = hKey(i, j + 1); if (!pts.has(k)) pts.set(k, [x0 + sx * lerp(bl, br), y0 + sy]); return k; };
+        const L = () => { const k = vKey(i, j); if (!pts.has(k)) pts.set(k, [x0, y0 + sy * lerp(tl, bl)]); return k; };
+        const R = () => { const k = vKey(i + 1, j); if (!pts.has(k)) pts.set(k, [x0 + sx, y0 + sy * lerp(tr, br)]); return k; };
+        switch (c) {
+          case 1: case 14: link(L(), B()); break;
+          case 2: case 13: link(B(), R()); break;
+          case 3: case 12: link(L(), R()); break;
+          case 4: case 11: link(T(), R()); break;
+          case 6: case 9: link(T(), B()); break;
+          case 7: case 8: link(L(), T()); break;
+          case 5: {
+            if ((tl + tr + br + bl) / 4 > t) { link(L(), T()); link(B(), R()); } else { link(T(), R()); link(L(), B()); }
+            break;
+          }
+          case 10: {
+            if ((tl + tr + br + bl) / 4 > t) { link(T(), R()); link(L(), B()); } else { link(L(), T()); link(B(), R()); }
+            break;
+          }
+        }
+      }
+    }
+    const seen = new Set(), lines = [];
+    const walk = (start) => {
+      const out = [pts.get(start)];
+      seen.add(start);
+      let prev = -1, cur = start, closed = false;
+      for (;;) {
+        const nb = adj.get(cur);
+        let next = -1;
+        for (const n of nb) if (n !== prev && !seen.has(n)) { next = n; break; }
+        if (next === -1) { if (nb.length > 1 && nb.includes(start) && out.length > 2) closed = true; break; }
+        out.push(pts.get(next)); seen.add(next); prev = cur; cur = next;
+      }
+      return { p: out, closed };
+    };
+    for (const [k, nb] of adj) if (nb.length === 1 && !seen.has(k)) lines.push(walk(k));
+    for (const k of adj.keys()) if (!seen.has(k)) lines.push(walk(k));
+    return lines;
+  }
+
+  function length(p, closed) {
+    let L = 0;
+    for (let i = 1; i < p.length; i++) L += Math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1]);
+    if (closed && p.length > 1) L += Math.hypot(p[0][0] - p[p.length - 1][0], p[0][1] - p[p.length - 1][1]);
+    return L;
+  }
+
+  function resampleUniform(p, closed, ds) {
+    const n = p.length, segs = closed ? n : n - 1, out = [p[0]];
+    let carry = 0;
+    for (let i = 0; i < segs; i++) {
+      const a = p[i], b = p[(i + 1) % n];
+      const L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      let d = ds - carry;
+      while (d <= L) { const t = d / L; out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]); d += ds; }
+      carry = L - (d - ds);
+    }
+    if (closed) { if (out.length > 2 && carry < ds * 0.5) out.pop(); }
+    else if (carry > 1e-6) out.push(p[n - 1]);
+    return out;
+  }
+
+  function blurLine(q, closed, sigma) {
+    const n = q.length;
+    if (n < 4 || sigma < 0.5) return q;
+    const r = Math.max(1, Math.min(Math.round(Math.sqrt(sigma * sigma + 1) - 0.5), closed ? Math.floor((n - 1) / 2) : n - 2));
+    let xs = Float64Array.from(q, (v) => v[0]), ys = Float64Array.from(q, (v) => v[1]);
+    const at = (arr, i) => {
+      if (closed) return arr[((i % n) + n) % n];
+      if (i < 0) return 2 * arr[0] - arr[-i];
+      if (i >= n) return 2 * arr[n - 1] - arr[2 * n - 2 - i];
+      return arr[i];
+    };
+    const pass = (arr) => {
+      const out = new Float64Array(n), win = 2 * r + 1;
+      let sum = 0;
+      for (let i = -r; i <= r; i++) sum += at(arr, i);
+      for (let i = 0; i < n; i++) { out[i] = sum / win; sum += at(arr, i + r + 1) - at(arr, i - r); }
+      return out;
+    };
+    for (let k = 0; k < 3; k++) { xs = pass(xs); ys = pass(ys); }
+    const out = new Array(n);
+    for (let i = 0; i < n; i++) out[i] = [xs[i], ys[i]];
+    if (!closed) { out[0] = q[0]; out[n - 1] = q[n - 1]; }
+    return out;
+  }
+
+  function smoothLine(p, closed, sigmaPx) {
+    if (sigmaPx <= 0.3) return p;
+    const ds = Math.max(0.6, Math.min(4, sigmaPx / 5));
+    const q = resampleUniform(p, closed, ds);
+    return blurLine(q, closed, sigmaPx / ds / Math.sqrt(3));
+  }
+
+  function simplify(p, eps) {
+    if (p.length < 3) return p;
+    const keep = new Uint8Array(p.length); keep[0] = keep[p.length - 1] = 1;
+    const stack = [[0, p.length - 1]], e2 = eps * eps;
+    while (stack.length) {
+      const [a, b] = stack.pop();
+      const [ax, ay] = p[a], [bx, by] = p[b];
+      const dx = bx - ax, dy = by - ay, len = dx * dx + dy * dy;
+      let md = 0, mi = -1;
+      for (let i = a + 1; i < b; i++) {
+        const [px, py] = p[i];
+        let d;
+        if (len === 0) d = (px - ax) ** 2 + (py - ay) ** 2;
+        else { const c = dx * (py - ay) - dy * (px - ax); d = (c * c) / len; }
+        if (d > md) { md = d; mi = i; }
+      }
+      if (md > e2) { keep[mi] = 1; stack.push([a, mi], [mi, b]); }
+    }
+    return p.filter((_, i) => keep[i]);
+  }
+
+  const n1 = (v) => Math.round(v * 10) / 10;
+  const sharp = (a, b, c) => {
+    const ux = b[0] - a[0], uy = b[1] - a[1], vx = c[0] - b[0], vy = c[1] - b[1], l = Math.hypot(ux, uy) * Math.hypot(vx, vy);
+    return l > 0 && (ux * vx + uy * vy) / l < 0.5;
+  };
+  function bez(p0, p1, p2, p3) {
+    const L = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]) / 3;
+    const h = (ax, ay) => { const l = Math.hypot(ax, ay) / 6; return l > L ? L / l / 6 : 1 / 6; };
+    if (sharp(p0, p1, p2)) p0 = [2 * p1[0] - p2[0], 2 * p1[1] - p2[1]];
+    if (sharp(p1, p2, p3)) p3 = [2 * p2[0] - p1[0], 2 * p2[1] - p1[1]];
+    const ax = p2[0] - p0[0], ay = p2[1] - p0[1], bx = p3[0] - p1[0], by = p3[1] - p1[1], ka = h(ax, ay), kb = h(bx, by);
+    return `C${n1(p1[0] + ax * ka)} ${n1(p1[1] + ay * ka)} ${n1(p2[0] - bx * kb)} ${n1(p2[1] - by * kb)} ${n1(p2[0])} ${n1(p2[1])}`;
+  }
+  function toPath(p, closed) {
+    const n = p.length;
+    if (n < 2) return "";
+    let d = `M${n1(p[0][0])} ${n1(p[0][1])}`;
+    if (n < 3) return d + `L${n1(p[1][0])} ${n1(p[1][1])}`;
+    const segs = closed ? n : n - 1;
+    const at = (i) => (closed ? p[(i + n) % n] : p[Math.max(0, Math.min(n - 1, i))]);
+    for (let i = 0; i < segs; i++) {
+      const p0 = at(i - 1), p1 = at(i), p2 = at(i + 1), p3 = at(i + 2);
+      d += bez(p0, p1, p2, p3);
+    }
+    return d + (closed ? "Z" : "");
+  }
+
+  function padField(field) {
+    const { f, nx, ny, sx, sy, min, max } = field;
+    const NX = nx + 2, NY = ny + 2, g = new Float32Array(NX * NY).fill(min - 1000 * (max - min || 1));
+    for (let j = 0; j < ny; j++) g.set(f.subarray(j * nx, j * nx + nx), (j + 1) * NX + 1);
+    return { ...field, f: g, nx: NX, ny: NY, cols: NX - 1, rows: NY - 1, ox: -sx, oy: -sy };
+  }
+
+  function regionLine(p, sigma, w, h, eps) {
+    const out = (q) => q[0] < 0.01 || q[1] < 0.01 || q[0] > w - 0.01 || q[1] > h - 0.01;
+    const snap = (v, m) => (v < 1 ? 0 : v > m - 1 ? m : v);
+    const clampPt = (q) => [snap(q[0], w), snap(q[1], h)];
+    let q = p;
+    if (sigma > 0.3) {
+      const ds = Math.max(0.6, Math.min(4, sigma / 5));
+      const r = resampleUniform(p, true, ds);
+      const b = blurLine(r, true, sigma / ds / Math.sqrt(3));
+      const reach = 2.5 * sigma;
+      q = b.map((v, i) => {
+        const p0 = r[i];
+        if (out(p0)) return p0;
+        const t = Math.min(1, Math.min(p0[0], p0[1], w - p0[0], h - p0[1]) / reach);
+        return t >= 1 ? v : [p0[0] + (v[0] - p0[0]) * t, p0[1] + (v[1] - p0[1]) * t];
+      });
+    }
+    q = simplify(q.map(clampPt), eps);
+    const n = q.length;
+    if (n < 3) return "";
+    const edge = (a, b) => (a[0] === 0 && b[0] === 0) || (a[0] === w && b[0] === w) || (a[1] === 0 && b[1] === 0) || (a[1] === h && b[1] === h);
+    const at = (i) => q[(i + n) % n];
+    let d = `M${n1(q[0][0])} ${n1(q[0][1])}`;
+    for (let i = 0; i < n; i++) {
+      const p0 = at(i - 1), p1 = at(i), p2 = at(i + 1), p3 = at(i + 2);
+      if (edge(p1, p2)) { d += `L${n1(p2[0])} ${n1(p2[1])}`; continue; }
+      const a0 = edge(p0, p1) ? p1 : p0, a3 = edge(p2, p3) ? p2 : p3;
+      d += bez(a0, p1, p2, a3);
+    }
+    return d + "Z";
+  }
+
+  function outlinePath(p, closed, widthAt) {
+    const n = p.length;
+    if (n < 2) return "";
+    const len = [0];
+    for (let i = 1; i < n; i++) len.push(len[i - 1] + Math.hypot(p[i][0] - p[i - 1][0], p[i][1] - p[i - 1][1]));
+    const total = len[n - 1];
+    const Lp = [], Rp = [], tan = [];
+    for (let i = 0; i < n; i++) {
+      const a = closed ? p[(i - 1 + n) % n] : p[Math.max(0, i - 1)];
+      const b = closed ? p[(i + 1) % n] : p[Math.min(n - 1, i + 1)];
+      let tx = b[0] - a[0], ty = b[1] - a[1];
+      const tl = Math.hypot(tx, ty) || 1;
+      tx /= tl; ty /= tl;
+      const hw = Math.max(0.04, widthAt(p[i][0], p[i][1], len[i], total - len[i])) / 2;
+      Lp.push([p[i][0] - ty * hw, p[i][1] + tx * hw]);
+      Rp.push([p[i][0] + ty * hw, p[i][1] - tx * hw]);
+      tan.push([tx, ty, hw]);
+    }
+    if (closed) return toPath(Lp, true) + toPath(Rp.reverse(), true);
+    const [sx, sy, sh] = tan[0], [ex, ey, eh] = tan[n - 1];
+    return toPath([...Lp, [p[n - 1][0] + ex * eh, p[n - 1][1] + ey * eh], ...Rp.reverse(), [p[0][0] - sx * sh, p[0][1] - sy * sh]], true);
+  }
+
+  const hex = (c) => [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16));
+  const mix = (a, b, t) => "#" + hex(a).map((v, i) => Math.round(v + (hex(b)[i] - v) * t).toString(16).padStart(2, "0")).join("");
+  function inkFor(s, pos, i, blend) {
+    const inks = [s.line, ...(s.mids || []), s.line2];
+    const t = Math.min(1, Math.max(0, pos));
+    if (inks.length === 2) return blend ? mix(s.line, s.line2, t) : s.line;
+    if (!blend) return inks[((i % inks.length) + inks.length) % inks.length];
+    const f = t * (inks.length - 1), k = Math.min(inks.length - 2, Math.floor(f));
+    return mix(inks[k], inks[k + 1], f - k);
+  }
+
+  const permCache = new Map();
+  function permFor(seed) {
+    if (permCache.has(seed)) return permCache.get(seed);
+    const rand = mulberry32(seed), p = new Uint8Array(256), perm = new Float32Array(512);
+    for (let i = 0; i < 256; i++) p[i] = i;
+    for (let i = 255; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [p[i], p[j]] = [p[j], p[i]]; }
+    for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
+    if (permCache.size > 16) permCache.clear();
+    permCache.set(seed, perm);
+    return perm;
+  }
+  function gpuSpec(s, res) {
+    if (s.swell > 0 || s.taper > 0) return null;
+    const w = s.w, h = s.h;
+    const cols = Math.max(2, Math.round(w / res)), rows = Math.max(2, Math.round(h / res));
+    if (cols > 4000 || rows > 4000) return null;
+    const sc = Math.max(4, s.scale), rand = mulberry32(s.seed ^ 0x9e3779b9);
+    const feats = [], auto = [];
+    for (let i = 0; i < 24; i++) {
+      const r = s.bumpSize * (0.6 + rand() * 0.8);
+      feats.push([rand() * w, rand() * h, r, (0.7 + rand() * 0.6) * (rand() < 0.3 ? -1 : 1)]);
+      auto.push([(0.08 + rand() * 0.84) * w, (0.08 + rand() * 0.84) * h, (0.25 + rand() * 0.45) * sc, 0.6 + rand() * 0.6]);
+    }
+    feats.length = Math.min(feats.length, s.features);
+    auto.length = Math.min(auto.length, Math.max(1, s.features));
+    const pts = s.usePoints && s.points ? s.points.map((p) => [p.x * w, p.y * h, Math.max(2, p.r), p.s]) : [];
+    if (pts.length > 32) return null;
+    const src = pts.length ? pts : auto;
+    const ang = ((s.angle + 90) * Math.PI) / 180;
+    const inks = [s.line, ...(s.mids || []), s.line2].slice(0, 8);
+    return {
+      cols, rows, nx: cols + 1, ny: rows + 1, sx: w / cols, sy: h / rows, w, h,
+      perm: permFor(s.seed), pattern: PATTERNS.findIndex((p) => p.id === s.pattern),
+      pts: src, user: pts.length ? 1 : 0, feats,
+      sc, oct: s.octaves, P: Math.max(0.3, s.falloff), bump: s.bump, liquify: s.liquify || 0, liqScale: Math.max(4, sc * (s.liqScale || 1)),
+      warp: s.warp || 0, loop: [s.loopX || 0, s.loopY || 0], drift: [s.driftX || 0, s.driftY || 0], loop2: [s.loopX2 ?? s.loopX ?? 0, s.loopY2 ?? s.loopY ?? 0], drift2: [s.driftX2 ?? s.driftX ?? 0, s.driftY2 ?? s.driftY ?? 0], glideW: s.glideW, driftR: s.driftR || 0, dir: [Math.cos(ang), Math.sin(ang)],
+      sigma: Math.pow(s.smooth, 1.5) * 48,
+      lin: LINEAR.has(s.pattern), gap: Math.max(0.5, s.gap), phase: s.phase || 0, levels: s.levels, g: Math.pow(2, s.bias),
+      mode: ["lines", "bands", "layers", "shaded"].indexOf(s.mode || "lines"), band: Math.max(0.02, Math.min(0.98, s.band ?? 0.5)),
+      weight: s.weight, every: s.indexEvery || 0, indexWeight: s.indexWeight, blend: s.gradient ? 1 : 0, angle: s.angle || 0,
+      inks, bg: s.bg, clear: s.transparent ? 1 : 0, opacity: s.opacity ?? 1,
+      seed: s.seed, rng: rangeSpec(s, w, h),
+    };
+  }
+
+  let svgSeq = 0;
+  // Tracing contours is the slow part, and it depends only on shape settings. Colors are painted on afterwards,
+  // so a color change reuses the traced paths and looks exactly like the frame before it.
+  const STYLE_KEYS = new Set(["line", "line2", "mids", "bg", "gradient", "transparent", "opacity", "ink", "paper", "fx", "fxOrder", "objects", "grad", "motion", "vid", "gif", "fmt", "pngScale", "name"]);
+  const geoCache = new Map();
+  const geoKey = (s, opts) => JSON.stringify([opts, Object.keys(s).filter((k) => !STYLE_KEYS.has(k)).sort().map((k) => [k, s[k]])]);
+  function traceGeometry(s, opts) {
+    const w = opts.w || s.w, h = opts.h || s.h, k = w / s.w;
+    const field = buildField(s, w, h, opts.res || s.res);
+    const span = field.max - field.min || 1;
+    const lin = LINEAR.has(s.pattern);
+    const levels = [];
+    if (lin) {
+      const gap = Math.max(0.5, s.gap * k);
+      const ph = s.phase || 0;
+      for (let i = Math.floor(field.min / gap - ph); (i + ph) * gap < field.max && levels.length < 900; i++) {
+        const t = (i + ph) * gap;
+        if (t <= field.min) continue;
+        levels.push({ t, idx: i, pos: (t - field.min) / span });
+      }
+    } else {
+      const g = Math.pow(2, s.bias), ph = s.phase || 0;
+      for (let L = ph ? -Math.ceil(ph) : 0; L < s.levels; L++) {
+        const tn = Math.pow((L + 1 + ph) / (s.levels + 1), g);
+        if (tn <= 0 || tn >= 1) continue;
+        levels.push({ t: field.min + tn * span, idx: L + 1, pos: tn });
+      }
+    }
+
+    const filled = s.swell > 0 || s.taper > 0;
+    const swellNoise = makeNoise(s.seed + 7919);
+    const swellLen = Math.max(4, s.swellSize * k), taperLen = s.taper * k;
+    const onEdge = ([x, y]) => x < 0.5 || y < 0.5 || x > w - 0.5 || y > h - 0.5;
+    const sigma = Math.pow(s.smooth, 1.5) * 48 * k;
+    const minLen = (opts.minLen ?? s.minLen) * k;
+    const every = s.indexEvery;
+    const mode = s.mode || "lines", parts = [];
+    let count = 0, dp = 0, base = 1;
+
+    if (mode !== "lines") {
+      const padded = padField(field);
+      const ringsAt = (t) => {
+        let d = "";
+        for (const ln of contour(padded, t)) {
+          if (length(ln.p, true) < Math.max(minLen, 2)) continue;
+          d += regionLine(ln.p, sigma, w, h, 0.3 * Math.max(k, 0.3));
+        }
+        return d;
+      };
+      const band = Math.max(0.02, Math.min(0.98, s.band ?? 0.5));
+      dp = 1.5 / Math.max(2, levels.length);
+      base = lin ? (() => { let b = Math.floor(field.min / Math.max(0.5, s.gap * k)); if (b * Math.max(0.5, s.gap * k) <= field.min) b++; return b; })() : 1;
+      levels.forEach((lv, i) => {
+        const next = levels[i + 1] ? levels[i + 1].t : lv.t + (i > 0 ? lv.t - levels[i - 1].t : span / 10);
+        const d = mode === "layers" ? ringsAt(lv.t) : ringsAt(lv.t) + ringsAt(lv.t + band * (next - lv.t));
+        if (!d) return;
+        parts.push({ d, i, pos: lv.pos, idx: lv.idx });
+        count++;
+      });
+      return { w, h, mode, parts, count, dp, base };
+    }
+
+    for (const lv of levels) {
+      const isIndex = every > 0 && ((lv.idx % every) + every) % every === 0;
+      const sw = Math.round(s.weight * (isIndex ? s.indexWeight : 1) * Math.max(k, 0.35) * 100) / 100;
+      let d = "";
+      for (const ln of contour(field, lv.t)) {
+        if (opts.closedOnly && !ln.closed) continue;
+        if (length(ln.p, ln.closed) < Math.max(minLen, 2)) continue;
+        const sm = simplify(smoothLine(ln.p, ln.closed, sigma), 0.3 * Math.max(k, 0.3));
+        if (sm.length < 2) continue;
+        if (filled) {
+          const tapA = !ln.closed && !onEdge(ln.p[0]), tapB = !ln.closed && !onEdge(ln.p[ln.p.length - 1]);
+          d += outlinePath(resampleUniform(sm, ln.closed, Math.max(1.5, swellLen / 10)), ln.closed, (x, y, d0, d1) => {
+            let f = 1;
+            if (s.swell > 0) {
+              const m = Math.min(1, Math.max(0, 0.5 + 0.8 * swellNoise(x / swellLen, y / swellLen)));
+              f = 1 + s.swell * (0.2 + 3.2 * m * m * m - 1);
+            }
+            if (taperLen > 0) {
+              const e = Math.min(tapA ? d0 : Infinity, tapB ? d1 : Infinity) / taperLen;
+              if (e < 1) f *= e * e * (3 - 2 * e);
+            }
+            return sw * f;
+          });
+        } else {
+          d += toPath(sm, ln.closed);
+        }
+        count++;
+      }
+      if (d) parts.push({ d, pos: lv.pos, idx: lv.idx, sw, filled });
+    }
+    return { w, h, mode, parts, count };
+  }
+  function geometry(s, opts) {
+    const key = geoKey(s, opts), hit = geoCache.get(key);
+    if (hit) { geoCache.delete(key); geoCache.set(key, hit); return hit; }
+    const g = traceGeometry(s, opts);
+    geoCache.set(key, g);
+    if (geoCache.size > 64) geoCache.delete(geoCache.keys().next().value);
+    return g;
+  }
+  function buildSVG(s, opts = {}) {
+    const { w, h, mode, parts, count, dp, base } = geometry(s, opts);
+    let body = "", defs = "";
+    if (mode !== "lines") {
+      const uid = (++svgSeq).toString(36), turn = `rotate(${Math.round(-(s.angle || 0) + 90)} .5 .5)`;
+      for (const { d, i, pos, idx } of parts) {
+        if (mode === "shaded") {
+          const id = `gb${uid}-${i}`;
+          defs += `<linearGradient id="${id}" x1="0" y1="0" x2="1" y2="0" gradientTransform="${turn}"><stop offset="0" stop-color="${inkFor(s, pos - dp, i, true)}"/><stop offset="1" stop-color="${inkFor(s, pos + dp, i, true)}"/></linearGradient>`;
+          body += `<path d="${d}" fill="url(#${id})" fill-rule="evenodd"/>`;
+        } else body += `<path d="${d}" fill="${inkFor(s, pos, idx - base, mode === "layers" || s.gradient)}" fill-rule="evenodd"/>`;
+      }
+    } else {
+      for (const { d, pos, idx, sw, filled } of parts) {
+        const color = inkFor(s, pos, idx - 1, s.gradient);
+        body += filled ? `<path d="${d}" fill="${color}"/>` : `<path d="${d}" fill="none" stroke="${color}" stroke-width="${sw}"/>`;
+      }
+    }
+    const bg = s.transparent ? "" : `<rect width="${w}" height="${h}" fill="${s.bg}"/>`;
+    const op = s.opacity < 1 ? ` opacity="${s.opacity}"` : "";
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">${defs ? `<defs>${defs}</defs>` : ""}${bg}<g stroke-linecap="round" stroke-linejoin="round"${op}>${body}</g></svg>`;
+    return { svg, count };
+  }
+
+  // True when buildSVG can reuse traced paths for this state, so it costs a few milliseconds.
+  const traced = (s, opts = {}) => geoCache.has(geoKey(s, opts));
+  root.Topo = { PATTERNS, LINEAR, ANGLED, buildSVG, traced, gpuSpec, buildField, mulberry32, makeNoise };
+})(typeof window !== "undefined" ? window : globalThis);

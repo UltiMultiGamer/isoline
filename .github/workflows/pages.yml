@@ -1,0 +1,70 @@
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('pages-pr-{0}', github.event.number) || 'pages' }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install capture tools
+        run: |
+          npm i --no-save --no-package-lock sharp@0.33.5 playwright@1.48.2
+          npx playwright install --with-deps chromium
+      - name: Capture library previews
+        run: node tools/previews.mjs
+      - name: Commit new previews
+        if: github.event_name != 'pull_request'
+        run: |
+          git add previews
+          if ! git diff --cached --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "Update library previews"
+            git push
+          fi
+      - name: Assemble site
+        run: |
+          mkdir _site
+          cp index.html logos.html style.css *.js _site/
+          cp -r previews _site/
+          SHA=${GITHUB_SHA::7}
+          sed -i "s/__BUILD__/$SHA/" _site/app.js
+          sed -i -E "s/(src=\"[a-z0-9-]+\.js)\"/\1?v=$SHA\"/g; s/href=\"style\.css\"/href=\"style.css?v=$SHA\"/" _site/index.html
+          sed -i "s#/isoline/og.jpg\"#/isoline/og.jpg?v=$SHA\"#g" _site/index.html
+          echo "{\"build\":\"$SHA\"}" > _site/version.json
+          cp og.jpg favicon.svg _site/
+      - uses: actions/configure-pages@v5
+        if: github.event_name != 'pull_request'
+      - uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'pull_request'
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
