@@ -2266,8 +2266,8 @@
   $("exportSettings").onclick = () => { closeMenus(); download(new Blob([settingsJSON()], { type: "application/json" }), `isoline-settings-${S.seed}.json`, "Settings saved"); };
   $("copySettings").onclick = async () => { closeMenus(); try { await navigator.clipboard.writeText(settingsJSON()); toast("Settings copied"); } catch (e) { toast("Clipboard blocked. Use Download"); } };
   $("importSettings").onclick = () => { closeMenus(); $("importErr").hidden = true; $("importText").value = ""; openModal("importModal"); $("importText").focus(); };
-  const ISSUES = "https://github.com/UltiMultiGamer/isoline/issues/new";
-  const FB_KIND = { bug: ["Bug", "bug"], idea: ["Idea", "enhancement"], other: ["Feedback", "feedback"] };
+  const FORM = "https://docs.google.com/forms/d/e/1FAIpQLScQT4JNpqDqKx3q5KqXzHmD-OndI_lgFQfdY9edhzA_oTxlDA/viewform";
+  const FB_KIND = { bug: ["Bug"], idea: ["Idea"], other: ["Feedback"] };
   let fbKind = "bug";
   const pageInfo = () => {
     const route = window.Shell?.route || "home", ua = (["Edg", "Firefox", "Chrome", "Version"].map((n) => navigator.userAgent.match(new RegExp(n + "/[\\d.]+"))?.[0]).find(Boolean) || "unknown browser").replace("Version", "Safari");
@@ -2286,26 +2286,15 @@
   $("fbSubject").oninput = syncFb;
   $("fbText").oninput = (e) => { syncFb(); window.UI?.autosize(e.target); };
   $("fbCancel").onclick = () => closeModal("feedbackModal");
-  const FEEDBACK_URL = "";
-  $("fbOk").onclick = async () => {
-    const [name, label] = FB_KIND[fbKind], text = $("fbText").value.trim(), subj = $("fbSubject").value.trim() || text.split("\n")[0].slice(0, 80);
-    const details = $("fbInfo").checked ? pageInfo().map(([k, v]) => `- **${k}:** ${v}`).join("\n") : "";
-    const done = (msg) => { closeModal("feedbackModal"); $("fbSubject").value = $("fbText").value = ""; $("fbOk").disabled = true; toast(msg); };
-    if (FEEDBACK_URL) {
-      $("fbOk").disabled = true; $("fbOk").lastChild.textContent = "Sending";
-      try {
-        const r = await fetch(FEEDBACK_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: fbKind, title: $("fbSubject").value.trim(), body: text, details, website: $("fbHp").value }) });
-        if (r.ok) { $("fbOk").lastChild.textContent = "Send"; return done("Sent. Thanks for the feedback."); }
-      } catch (e) {}
-      $("fbOk").lastChild.textContent = "Send"; $("fbOk").disabled = false;
-      toast("Opening GitHub instead");
-    }
-    let body = text || "_No details given._";
-    if (details) body += "\n\n<details><summary>Page details</summary>\n\n" + details + "\n</details>";
-    window.open(`${ISSUES}?title=${encodeURIComponent(`${name}: ${subj}`)}&labels=${label}&body=${encodeURIComponent(body.slice(0, 6000))}`, "_blank", "noopener");
-    done("Thanks. Post it on the GitHub page that opened.");
+  $("fbOk").onclick = () => {
+    const [name] = FB_KIND[fbKind], text = $("fbText").value.trim(), subj = $("fbSubject").value.trim() || text.split("\n")[0].slice(0, 80);
+    const details = $("fbInfo").checked ? pageInfo().map(([k, v]) => `${k}: ${v}`).join("\n") : "";
+    const note = `${name}: ${subj}\n\n${text || "No details given."}${details ? "\n\nPage details\n" + details : ""}`.slice(0, 6000);
+    const copied = navigator.clipboard?.writeText(note).then(() => true, () => false) ?? Promise.resolve(false);
+    window.open(FORM, "_blank", "noopener");
+    closeModal("feedbackModal"); $("fbSubject").value = $("fbText").value = ""; $("fbOk").disabled = true;
+    copied.then((ok) => toast(ok ? "Your note is copied. Paste it into the form that opened." : "The form opened in a new tab."));
   };
-  if (FEEDBACK_URL) { $("fbOk").lastChild.textContent = "Send"; $("fbOk").querySelector("svg").remove(); $("feedbackModal").querySelector(".note").textContent = "Goes straight to the team as a GitHub issue."; }
   const LOG = window.CHANGELOG || [], VERSION = LOG[0]?.v || "1.0.0", BUILD = "__BUILD__", stamped = !BUILD.startsWith("__");
   const logDate = (at) => new Date(at).toLocaleString(I18N.lang === "ru" ? "ru-RU" : "en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
   $("verLine").textContent = stamped && LOG[0] ? `Version ${VERSION} from ${logDate(LOG[0].at)}` : `Version ${VERSION}, local copy`;
