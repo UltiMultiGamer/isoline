@@ -1,8 +1,8 @@
 window.I18N_RU = {
-  "Opens our feedback form with your note copied, ready to paste.": "Откроет форму отзыва, а ваш текст будет скопирован, останется вставить.",
+  "Design feedback": "Отзыв о дизайне",
+  "Opens our feedback form with your note filled in.": "Откроет форму отзыва с уже заполненным текстом.",
+  "The form opened with your note filled in. Press Submit there to send it.": "Форма открылась с вашим текстом. Нажмите в ней «Отправить».",
   "Continue to the form": "Перейти к форме",
-  "Your note is copied. Paste it into the form that opened.": "Текст скопирован. Вставьте его в открывшуюся форму.",
-  "The form opened in a new tab.": "Форма открылась в новой вкладке.",
   "Isoline 1.0": "Isoline 1.0",
   "The Studio: contour lines and bands, ten gradient generators and your own pictures": "Студия: контурные линии и полосы, десять генераторов градиентов и ваши картинки",
   "50 stackable effects, from glass and blur to print textures": "50 эффектов, которые можно складывать, от стекла и размытия до печатных фактур",

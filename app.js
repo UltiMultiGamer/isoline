@@ -2267,7 +2267,8 @@
   $("copySettings").onclick = async () => { closeMenus(); try { await navigator.clipboard.writeText(settingsJSON()); toast("Settings copied"); } catch (e) { toast("Clipboard blocked. Use Download"); } };
   $("importSettings").onclick = () => { closeMenus(); $("importErr").hidden = true; $("importText").value = ""; openModal("importModal"); $("importText").focus(); };
   const FORM = "https://docs.google.com/forms/d/e/1FAIpQLScQT4JNpqDqKx3q5KqXzHmD-OndI_lgFQfdY9edhzA_oTxlDA/viewform";
-  const FB_KIND = { bug: ["Bug"], idea: ["Idea"], other: ["Feedback"] };
+  const FORM_FIELDS = { kind: "entry.388241095", title: "entry.2015363973", body: "entry.928120778" };
+  const FB_KIND = { bug: ["Bug", "Bug Report"], idea: ["Idea", "Feature Request"], other: ["Design feedback", "Design Feedback"] };
   let fbKind = "bug";
   const pageInfo = () => {
     const route = window.Shell?.route || "home", ua = (["Edg", "Firefox", "Chrome", "Version"].map((n) => navigator.userAgent.match(new RegExp(n + "/[\\d.]+"))?.[0]).find(Boolean) || "unknown browser").replace("Version", "Safari");
@@ -2287,13 +2288,14 @@
   $("fbText").oninput = (e) => { syncFb(); window.UI?.autosize(e.target); };
   $("fbCancel").onclick = () => closeModal("feedbackModal");
   $("fbOk").onclick = () => {
-    const [name] = FB_KIND[fbKind], text = $("fbText").value.trim(), subj = $("fbSubject").value.trim() || text.split("\n")[0].slice(0, 80);
+    const [name, label] = FB_KIND[fbKind], text = $("fbText").value.trim(), subj = $("fbSubject").value.trim() || text.split("\n")[0].slice(0, 80) || name;
     const details = $("fbInfo").checked ? pageInfo().map(([k, v]) => `${k}: ${v}`).join("\n") : "";
-    const note = `${name}: ${subj}\n\n${text || "No details given."}${details ? "\n\nPage details\n" + details : ""}`.slice(0, 6000);
-    const copied = navigator.clipboard?.writeText(note).then(() => true, () => false) ?? Promise.resolve(false);
-    window.open(FORM, "_blank", "noopener");
+    const body = `${text || "No details given."}${details ? "\n\nPage details\n" + details : ""}`.slice(0, 1800);
+    const q = new URLSearchParams({ usp: "pp_url", [FORM_FIELDS.title]: subj, [FORM_FIELDS.body]: body });
+    if (label) q.set(FORM_FIELDS.kind, label);
+    window.open(`${FORM}?${q}`, "_blank", "noopener");
     closeModal("feedbackModal"); $("fbSubject").value = $("fbText").value = ""; $("fbOk").disabled = true;
-    copied.then((ok) => toast(ok ? "Your note is copied. Paste it into the form that opened." : "The form opened in a new tab."));
+    toast("The form opened with your note filled in. Press Submit there to send it.");
   };
   const LOG = window.CHANGELOG || [], VERSION = LOG[0]?.v || "1.0.0", BUILD = "__BUILD__", stamped = !BUILD.startsWith("__");
   const logDate = (at) => new Date(at).toLocaleString(I18N.lang === "ru" ? "ru-RU" : "en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
