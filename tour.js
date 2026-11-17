@@ -419,7 +419,6 @@
   const shown = (sel) => { const n = document.querySelector(sel); return !!n && n.getClientRects().length > 0; };
   const sizeOf = () => { const st = root.Studio?.state?.(); return st ? st.w + "x" + st.h : ""; };
   const hasHandles = () => !!document.querySelector("#ov:not(.off) .pt, #ov:not(.off) .fc, #ov:not(.off) .ob");
-  // Counts a real drag of a canvas handle: pressed on one and moved a few pixels.
   function watchCanvas(c) {
     c.size0 = sizeOf();
     const ov = document.getElementById("ov"); if (!ov) return;
@@ -516,7 +515,6 @@
     if (moving) root.Shell?.go(name);
     const spotEl = document.createElement("div"), tip = document.createElement("div"), dot = document.createElement("div");
     spotEl.className = "tour-spot js"; tip.className = "tour-tip v3"; dot.className = "tp tour-dot";
-    // The dim layer: one sheet with a cut-out for the outline and one for each hint, plus the dashed hint rings and arrows.
     const NS = "http://www.w3.org/2000/svg", vid = "tvm" + Math.random().toString(36).slice(2, 8), veil = document.createElementNS(NS, "svg");
     veil.setAttribute("class", "tour-veil"); veil.setAttribute("aria-hidden", "true");
     veil.innerHTML = `<defs><mask id="${vid}" maskUnits="userSpaceOnUse" x="0" y="0" width="100%" height="100%"><rect width="100%" height="100%" fill="#fff"/><g class="tv-holes"></g></mask></defs><rect class="tv-dim" width="100%" height="100%" mask="url(#${vid})"/><g class="tv-trails"></g><g class="tv-rings"></g>`;
@@ -591,12 +589,11 @@
           if (tg.side || y < m) { y = Math.min(innerHeight - th - m, Math.max(m, r.top + r.height / 2 - th / 2)); x = r.right + 14 + tw < innerWidth - m ? r.right + 14 : r.left - tw - 14; }
           moveTip(Math.max(m, Math.min(innerWidth - tw - m, x)), Math.max(m, Math.min(innerHeight - th - m, y)), el !== lastEl);
         }
-        // While the outline is split into hints, the pointers belong to the hints, so no off-screen arrow.
         const dir = split && !split.merging ? null : r.bottom < 10 ? "up" : r.top > floor - 10 ? "down" : null;
         setAway(dir);
         // Point at something you can actually press: the first visible match for the task inside the outline.
         const hits = clickables(r, floor), hit = hits[0]?.b;
-        syncMany(!dir && !released && !(split && !split.merging) && !tip.classList.contains("done") ? hits.slice(1) : [], floor);
+        if (!frozen) syncMany(!dir && !released && !(split && !split.merging) && !tip.classList.contains("done") ? hits.slice(1) : [], floor);
         aim = dir ? [Math.max(34, Math.min(wall - 34, r.left + r.width / 2)), dir === "up" ? 36 : floor - 36]
                   : hit ? [hit.left + hit.width / 2, Math.min(Math.max(hit.top + hit.height / 2, 14), floor - 14)]
                   : [r.left + r.width * 0.5, Math.min(Math.max(r.top + Math.min(r.height * 0.5, 40), 14), floor - 14)];
@@ -609,10 +606,9 @@
       anchor = r ? [r.left, r.top] : null;
       lastEl = el;
       paintHoles([box, ...drawSplit(aim)]);
-      if (aim && (!split || split.merging)) cur.aim(aim[0], aim[1], !!st.center);
+      if (aim && (!split || split.merging) && !frozen) cur.aim(aim[0], aim[1], !!st.center);
     }
 
-    // Cut-outs in the dim layer, one per box, with the outline's rounded corners.
     const holeEls = [];
     const lerpBox = (a, b, e) => ({ l: a.l + (b.l - a.l) * e, t: a.t + (b.t - a.t) * e, w: a.w + (b.w - a.w) * e, h: a.h + (b.h - a.h) * e });
     const setRect = (n, b, rx) => {
@@ -624,45 +620,43 @@
       holeEls.forEach((n, k) => setRect(n, list[k] || { l: 0, t: 0, w: 0, h: 0 }, 14));
     };
 
-    // The "by the way" part of a step: the outline splits into dashed rings around each hint, and the pointer splits
-    // with it. On wide screens each pointer draws a looping arrow on its way and settles into the arrowhead; on small
-    // screens the pointers simply move onto the hints. Moving on merges everything back into the one outline and pointer.
     let split = null;
+    const inside = (P, b) => P[0] > b.l && P[0] < b.l + b.w && P[1] > b.t && P[1] < b.t + b.h;
     const endAt = (S, b) => {
-      const qx = Math.max(b.l, Math.min(b.l + b.w, S[0])), qy = Math.max(b.t, Math.min(b.t + b.h, S[1])), dx = S[0] - qx, dy = S[1] - qy, d = Math.hypot(dx, dy);
-      return d < 1 ? [b.l + b.w / 2, b.t - 10] : [qx + (dx / d) * 9, qy + (dy / d) * 9];
+      const cx = b.l + b.w / 2, cy = b.t + b.h / 2, dx = S[0] - cx, dy = S[1] - cy, d = Math.hypot(dx, dy) || 1;
+      const k = Math.min(dx ? b.w / 2 / Math.abs(dx) : Infinity, dy ? b.h / 2 / Math.abs(dy) : Infinity);
+      return [cx + dx * k + (dx / d) * 10, cy + dy * k + (dy / d) * 10];
     };
-    // A hand-drawn arrow: one smooth arc that bows outward onto the hint, with a single pen loop written into it
-    // early on. The loop is a stretch of prolate cycloid laid along the arc: the stroke keeps moving forward,
-    // rises, curls back over the top and comes down across itself, the way a hand writes a cursive "l", so it
-    // reads as one continuous stroke rather than a circle stuck on a line. `fan` bows each arrow of a group a little
-    // more than the last, and `lk` moves its loop along, so a group of arrows spreads apart.
-    const swirlAt = (S, E, sg, t, fan = 1, lk = 0) => {
-      const dx = E[0] - S[0], dy = E[1] - S[1], d = Math.hypot(dx, dy) || 1;
+    const swirlAt = (S, E, sg, t, fan = 1, lk = 0, C = E) => {
+      const dx = E[0] - S[0], dy = E[1] - S[1], d = Math.hypot(dx, dy) || 1, top = 18, W = innerWidth;
       let nx = -dy / d, ny = dx / d;
       if (ny > 0 || (Math.abs(ny) < 0.2 && nx * sg < 0)) { nx = -nx; ny = -ny; }
-      const bow = Math.min(0.3 * d, 200) * fan, R = Math.max(20, Math.min(38, d * 0.08)), loop = d > 170;
-      // Bow the other way when bowing up would carry the arrow off the top of the screen.
-      if (Math.min(S[1] + dy * 0.25 + ny * bow * 0.8, S[1] + dy * 0.8 + ny * bow * 0.55) - R * 2.5 < 12) { nx = -nx; ny = -ny; }
-      const c1x = S[0] + dx * 0.25 + nx * bow * 0.8, c1y = S[1] + dy * 0.25 + ny * bow * 0.8;
-      const c2x = S[0] + dx * 0.8 + nx * bow * 0.55, c2y = S[1] + dy * 0.8 + ny * bow * 0.55;
+      const R = Math.max(18, Math.min(32, d * 0.07)), loop = d > 170;
+      let bow = Math.min(0.3 * d, 200) * fan;
+      const room = (bw) => { const y = S[1] + dy * 0.3 + ny * bw * 0.8, x = S[0] + dx * 0.3 + nx * bw * 0.8; return y - (loop ? 2.2 * R : 0) >= top && x >= top && x <= W - top; };
+      if (!room(bow)) { let lo = 0, hi = bow; for (let j = 0; j < 12; j++) { const m = (lo + hi) / 2; if (room(m)) lo = m; else hi = m; } bow = lo; }
+      if (bow < 0.08 * d) { nx = -nx; ny = -ny; bow = Math.min(0.3 * d, 200) * fan * 0.6; }
+      let ux = E[0] - C[0], uy = E[1] - C[1], ul = Math.hypot(ux, uy);
+      if (ul < 1) { ux = -dx; uy = -dy; ul = d; }
+      const reach = Math.min(0.35 * d, 170);
+      const c1x = S[0] + dx * 0.3 + nx * bow * 0.8, c1y = S[1] + dy * 0.3 + ny * bow * 0.8;
+      const c2x = E[0] + (ux / ul) * reach + nx * bow * 0.25, c2y = E[1] + (uy / ul) * reach + ny * bow * 0.25;
       const base = (g) => { const u = 1 - g; return [u * u * u * S[0] + 3 * u * u * g * c1x + 3 * u * g * g * c2x + g * g * g * E[0], u * u * u * S[1] + 3 * u * u * g * c1y + 3 * u * g * g * c2y + g * g * g * E[1]]; };
-      // Loop shape: forward drift a per radian against radius b (b > a makes the loop), over one turn.
       const b = R, a = R * 0.38, L = d * (1 + 0.6 * (bow / d) * (bow / d)), dg = loop ? Math.min(0.3, (2 * Math.PI * a) / L) : 0;
       const ta = 0.3 + 0.05 * (lk - 1), tb = loop ? ta + 0.3 : ta, w = tb - ta, k = (1 - dg) / (1 - w);
-      // Time to arc position: steady outside the loop, and inside it the arc creeps forward by dg while the pen turns.
       const g = !loop ? t : t <= ta ? t * k : t >= tb ? ta * k + dg + (t - tb) * k : ta * k + dg * ((t - ta) / w);
       const [x, y] = base(g);
       if (!loop || t <= ta || t >= tb) return [x, y];
-      const [px, py] = base(Math.min(1, g + 0.002)), vx = px - x, vy = py - y, vl = Math.hypot(vx, vy) || 1, tx = vx / vl, ty = vy / vl;
-      // The loop rises on the outer side of the arc.
+      const gl = ta * k + dg / 2, [lx, ly] = base(gl), [px, py] = base(Math.min(1, g + 0.002)), vx = px - x, vy = py - y, vl = Math.hypot(vx, vy) || 1, tx = vx / vl, ty = vy / vl;
       let ox = -ty, oy = tx;
       if (ox * nx + oy * ny < 0) { ox = -ox; oy = -oy; }
+      const tipX = lx + ox * 2 * b, tipY = ly + oy * 2 * b;
+      if (tipY < top || tipX < top || tipX > W - top) { ox = -ox; oy = -oy; }
       const th = -Math.PI + (2 * Math.PI * (t - ta)) / w, along = -b * 1.35 * Math.sin(th), up = b * (1 + Math.cos(th));
       return [x + tx * along + ox * up, y + ty * along + oy * up];
     };
-    const trailD = (it, e) => { const n = Math.max(2, Math.ceil(220 * e)); let d = ""; for (let j = 0; j <= n; j++) { const [x, y] = swirlAt(it.S, it.E, it.sg, (e * j) / n, it.fan, it.lk); d += (j ? "L" : "M") + x.toFixed(1) + " " + y.toFixed(1); } return d; };
-    const headD = (it) => { const [x1, y1] = it.E, [x0, y0] = swirlAt(it.S, it.E, it.sg, 0.95, it.fan, it.lk), a = Math.atan2(y1 - y0, x1 - x0), L = 9, w = 0.52; return `M${(x1 - L * Math.cos(a - w)).toFixed(1)} ${(y1 - L * Math.sin(a - w)).toFixed(1)}L${x1.toFixed(1)} ${y1.toFixed(1)}L${(x1 - L * Math.cos(a + w)).toFixed(1)} ${(y1 - L * Math.sin(a + w)).toFixed(1)}`; };
+    const trailD = (it, e) => { const n = Math.max(2, Math.ceil(220 * e)); let d = ""; for (let j = 0; j <= n; j++) { const [x, y] = swirlAt(it.S, it.E, it.sg, (e * j) / n, it.fan, it.lk, it.C); d += (j ? "L" : "M") + x.toFixed(1) + " " + y.toFixed(1); } return d; };
+    const headD = (it) => { const [x1, y1] = it.E, [x0, y0] = swirlAt(it.S, it.E, it.sg, 0.97, it.fan, it.lk, it.C), a = Math.atan2(y1 - y0, x1 - x0), L = 9, w = 0.52; return `M${(x1 - L * Math.cos(a - w)).toFixed(1)} ${(y1 - L * Math.sin(a - w)).toFixed(1)}L${x1.toFixed(1)} ${y1.toFixed(1)}L${(x1 - L * Math.cos(a + w)).toFixed(1)} ${(y1 - L * Math.sin(a + w)).toFixed(1)}`; };
     function startSplit() {
       const st = s();
       if (!st.hints) return false;
@@ -679,13 +673,13 @@
       }
       if (!els.length) return false;
       const arrows = !docked() && !reduce.matches, P0 = cur.pos.slice(), from = { ...box }, tb = tip.getBoundingClientRect();
-      // Arrows leave from the top edge of the card, spread along it toward their hints. A card near the top of the
-      // screen sends them from the side that faces the hints instead.
       const fromSide = tb.top < 96, n0 = els.length, cxs = els.map((e) => { const b = e.getBoundingClientRect(); return b.left + b.width / 2; });
       const leftward = cxs.reduce((x, c) => x + c, 0) / n0 < tb.left + tb.width / 2;
+      const cys = els.map((e) => { const b = e.getBoundingClientRect(); return b.top + b.height / 2; });
+      const rankX = cxs.map((c) => cxs.filter((o) => o < c).length), rankY = cys.map((c) => cys.filter((o) => o < c).length);
       const startFor = (el, k) => {
-        if (fromSide) return [leftward ? tb.left - 6 : tb.right + 6, tb.top + Math.min(tb.height - 20, 28 + k * 22)];
-        const mid = tb.left + tb.width / 2, slot = (k - (n0 - 1) / 2) * 50;
+        if (fromSide) return [leftward ? tb.left - 6 : tb.right + 6, tb.top + Math.min(tb.height - 20, 28 + rankY[k] * 22)];
+        const mid = tb.left + tb.width / 2, slot = (rankX[k] - (n0 - 1) / 2) * 50;
         return [Math.max(tb.left + 22, Math.min(tb.right - 22, mid + (leftward ? -1 : 1) * tb.width * 0.18 + slot)), tb.top - 6];
       };
       split = { arrows, t0: performance.now(), merging: null, items: els.map((el, k) => {
@@ -693,10 +687,10 @@
         let d = dot, ptr = cur;
         if (k) { d = document.createElement("div"); d.className = "tp tour-dot clone"; document.body.appendChild(d); ptr = pointer(d, 0.03, 0.5); ptr.place(P0[0], P0[1]); }
         const ring = document.createElementNS(NS, "rect"); ring.setAttribute("class", "tv-ring"); ring.style.opacity = 0; ringsG.appendChild(ring);
-        const it = { el, d, ptr, ring, from, box: { ...from }, sg: el.getBoundingClientRect().left + 20 < S[0] ? 1 : -1, S, E: S, dur: 0, fan: 1 + 0.35 * k, lk: k % 3 };
-        // Each pointer pops up at its arrow's start on the card's edge.
-        if (arrows) { ptr.place(S[0], S[1]); if (!reduce.matches) d.animate([{ scale: 0.3, opacity: 0 }, { scale: 1, opacity: 1 }], { duration: 260, easing: "cubic-bezier(.3,1.5,.5,1)" }); }
-        if (arrows) {
+        const eb = el.getBoundingClientRect(), tc = [tb.left + tb.width / 2, tb.top + tb.height / 2], ebox = { l: eb.left, t: eb.top, w: eb.width, h: eb.height };
+        const it = { el, d, ptr, ring, from, box: { ...from }, sg: eb.left + 20 < S[0] ? 1 : -1, S, E: S, C: S, dur: 0, fan: 1 + 0.35 * k, lk: k % 3, noArrow: arrows && (inside(S, ebox) || inside(tc, ebox)) };
+        if (arrows && !it.noArrow) { ptr.place(S[0], S[1]); if (!reduce.matches) d.animate([{ scale: 0.3, opacity: 0 }, { scale: 1, opacity: 1 }], { duration: 260, easing: "cubic-bezier(.3,1.5,.5,1)" }); }
+        if (arrows && !it.noArrow) {
           it.g = document.createElementNS(NS, "g"); it.g.setAttribute("class", "tv-trail");
           it.g.innerHTML = `<path class="tv-halo tv-ln"/><path class="tv-line tv-ln"/><path class="tv-halo tv-hd"/><path class="tv-line tv-hd"/>`;
           trailsG.appendChild(it.g);
@@ -726,17 +720,17 @@
           return;
         }
         if (!split.arrows) { it.ptr.aim(goal.l + goal.w / 2, goal.t + goal.h / 2); return; }
-        it.E = endAt(it.S, goal);
+        if (it.noArrow) { it.ptr.aim(goal.l + Math.min(goal.w / 2, 60), goal.t + Math.min(goal.h / 2, 36)); return; }
+        it.E = endAt(it.S, goal); it.C = [goal.l + goal.w / 2, goal.t + goal.h / 2];
         const t = Math.min(1, Math.max(0, (now - split.t0 - k * 140) / it.dur)), e = inOut(t), line = trailD(it, e), head = headD(it);
         for (const n of it.g.querySelectorAll(".tv-ln")) n.setAttribute("d", line);
         for (const n of it.g.querySelectorAll(".tv-hd")) n.setAttribute("d", head);
-        if (t < 1) { const [x, y] = swirlAt(it.S, it.E, it.sg, e, it.fan, it.lk); it.ptr.place(x, y); }
+        if (t < 1) { const [x, y] = swirlAt(it.S, it.E, it.sg, e, it.fan, it.lk, it.C); it.ptr.place(x, y); }
         else if (!it.sunk) { it.sunk = true; it.d.classList.add("sunk"); it.g.classList.add("head"); }
       });
       if (m && P >= 1) dropSplit();
       return holes;
     }
-    // A finished step with nothing more to point at lets go: the outline, pointer and dim fade so the result shows.
     let released = false;
     function release(on) {
       if (released === on) return;
@@ -759,20 +753,22 @@
       }
       split = null; spotEl.classList.remove("tour-split"); dot.classList.remove("rest");
     }
-    // Everything you could press for the current task: the visible matches inside the outline, at most a dozen.
     function clickables(r, floor) {
       const ts = s()?.tasks || [], t = nextTask() || ts[ts.length - 1], sel = t?.aim || t?.click, out = [];
       if (!sel) return out;
       for (const n of document.querySelectorAll(sel)) {
         const b = n.getBoundingClientRect();
-        if (b.width && b.height && b.bottom > 8 && b.top < floor - 8 && b.left >= r.left - 2 && b.right <= r.right + 2 && b.top >= r.top - 2 && b.bottom <= r.bottom + 2) out.push({ n, b });
+        if (!(b.width && b.height && b.bottom > 8 && b.top < floor - 8 && b.left >= r.left - 2 && b.right <= r.right + 2 && b.top >= r.top - 2 && b.bottom <= r.bottom + 2)) continue;
+        const cx = b.left + b.width / 2, cy = b.top + b.height / 2;
+        if (out.some((o) => Math.hypot(o.b.left + o.b.width / 2 - cx, o.b.top + o.b.height / 2 - cy) < 34 || (Math.abs(o.b.top - b.top) < 4 && Math.abs(o.b.left - b.left) < 34))) continue;
+        out.push({ n, b });
         if (out.length >= 12) break;
       }
       return out;
     }
-    // One extra pointer for every other thing you could press. They spring out of the main pointer and fade away
-    // once one of them is pressed; the pressed one hands its place to the main pointer, which plays the click.
     const many = [];
+    let frozen = false, fzT = 0;
+    const freeze = (on = true) => { frozen = on; clearTimeout(fzT); if (on) fzT = setTimeout(() => (frozen = false), 1400); };
     const dropMany = (keep) => {
       while (many.length) {
         const m = many.pop(); m.ptr.stop();
@@ -787,10 +783,10 @@
         if (!m) {
           const d = document.createElement("div"); d.className = "tp tour-dot clone" + (touch ? " touch" : ""); document.body.appendChild(d);
           const ptr = pointer(d, 0.03, 0.5), [x, y] = cur.pos; ptr.place(x, y);
-          m = many[k] = { d, ptr };
+          m = many[k] = { d, ptr, at: performance.now() + k * 90 };
         }
         m.n = h.n;
-        m.ptr.aim(h.b.left + h.b.width / 2, Math.min(Math.max(h.b.top + h.b.height / 2, 14), floor - 14));
+        if (performance.now() >= m.at) m.ptr.aim(h.b.left + h.b.width / 2, Math.min(Math.max(h.b.top + h.b.height / 2, 14), floor - 14));
       });
     }
     function moveTip(x, y, fresh) {
@@ -862,11 +858,8 @@
       dot.animate([{ scale: 1 }, { scale: 1.45 }, { scale: 1 }], { duration: 420, easing: "cubic-bezier(.3,1.5,.5,1)" });
       if (touch) { dot.classList.add("rest"); setTimeout(() => dot.classList.remove("rest"), 900); }
     };
-    // Descriptions: [word] marks a control by name, {text} is a link that runs the step's action, and a new line breaks.
     const esc = (x) => String(x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
     const rich = (x) => esc(T(x)).replace(/\[([^\]]+)\]/g, '<u class="tour-term">$1</u>').replace(/\{([^}]+)\}/g, '<button type="button" class="tour-link" data-a="do">$1</button>').replace(/\n/g, "<br>");
-    // What the description says right now: the step's text, the next task's own line once earlier ones are done,
-    // or the step's result once everything is.
     const descFor = () => {
       const st = s(), ts = st.tasks || [], nt = nextTask();
       if (!ts.length) return st.p;
@@ -875,7 +868,6 @@
       if (st.anyOrder || !nt.p || k === 0) return st.p;
       return nt.pSkip && ts.slice(0, k).every((t) => t.skipped) ? nt.pSkip : nt.p;
     };
-    // A new description fades in tinted with the accent, then settles to the normal text color: one pulse.
     const setDesc = (x, pulse) => {
       const p = tip.querySelector(".tour-desc");
       if (!p || !x || p._x === x) return;
@@ -884,7 +876,6 @@
       const a = getComputedStyle(tip).getPropertyValue("--accent").trim() || "#e8572a", n = getComputedStyle(p).color;
       p.animate([{ color: a, opacity: 0, translate: "0 4px" }, { color: a, opacity: 1, translate: "0 0", offset: 0.2 }, { color: a, offset: 0.42 }, { color: n }], { duration: 1500, easing: "cubic-bezier(.3,.6,.4,1)" });
     };
-    // Keeps the list in step with the page: which task is next, which can't be done yet, and the matching text.
     const refresh = () => {
       if (tip.classList.contains("done")) return;
       const nt = nextTask();
@@ -895,7 +886,7 @@
       t.done = true; li.classList.add("done"); li.classList.remove("cur");
       pop();
       if (!reduce.matches) li.querySelector(".tk").animate([{ scale: 0.6 }, { scale: 1.22 }, { scale: 1 }], { duration: 420, easing: "cubic-bezier(.3,1.5,.5,1)" });
-      if (nextTask()) { refresh(); setTimeout(point, 250); return; }
+      if (nextTask()) { refresh(); setTimeout(() => freeze(false), 380); setTimeout(point, 250); return; }
       finished();
     };
     const finished = () => {
@@ -906,21 +897,19 @@
       tip.classList.add("done");
       setDesc(s().ok, true);
       let hinted = startSplit();
-      // Let the click animation play before letting go.
       if (!hinted && !s().hints) { const at = i; setTimeout(() => { if (tour && i === at && tip.classList.contains("done")) release(true); }, 520); }
-      // Hints off screen (the layer previews sit above the panel on a phone): scroll them into view, then split.
       if (!hinted && s().hints) {
         const h = document.querySelector(s().hints[0].el), at = i;
         hinted = !!h;
         if (h) (async () => { await wait(600); if (!tour || i !== at) return; pad(); await reveal(h, 12, docked() && !sideDock() ? tip.getBoundingClientRect().top - 12 : innerHeight - 12); if (tour && i === at && tip.classList.contains("done")) startSplit(); })();
       }
       if (!reduce.matches) tip.animate([{ boxShadow: "var(--pop), 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent)" }, { boxShadow: "var(--pop), 0 0 0 10px transparent" }], { duration: 700, easing: "ease-out" });
-      const nx = tip.querySelector('[data-a="next"]'), wait2 = s().tasks?.some((t) => t.click === '.home [data-go="studio"]') ? 0 : hinted ? 4800 : 3400;
+      const nx = tip.querySelector('[data-a="next"]'), wait2 = s().tasks?.some((t) => t.click === '.home [data-go="studio"]') ? 0 : hinted ? 7000 : 5200;
       nx.querySelector("span").textContent = T(s().next || "Next"); nx.classList.replace("ghost", "primary");
       if (!wait2) return;
       const fill = nx.querySelector(".cd");
       nx.classList.add("counting");
-      if (fill && !reduce.matches) fill.animate([{ scale: "0 1" }, { scale: "1 1" }], { duration: wait2, easing: "linear", fill: "forwards" });
+      if (fill) fill.animate([{ clipPath: "inset(0 0 0 0)" }, { clipPath: "inset(0 0 0 100%)" }], { duration: reduce.matches ? 1 : wait2, easing: "linear", fill: "forwards" });
       const at = i; doneT = setTimeout(() => { if (tour && i === at) go(i + 1); }, wait2);
     };
     const arm = () => {
@@ -929,10 +918,15 @@
         const hit = () => { if (t.done || !tour) return; const li = tip.querySelector(`li[data-k="${k}"]`); if (li) tick(t, li); };
         if (t.click) {
           // Earlier tasks first: a click only counts once the list reaches it.
-          const h = (e) => { if (!tip.contains(e.target) && e.target.closest?.(t.click) && (s().anyOrder ? !t.done && usable(t) : nextTask() === t)) setTimeout(hit, 220); };
+          const h = (e) => { if (!tip.contains(e.target) && e.target.closest?.(t.click) && (s().anyOrder ? !t.done && usable(t) : nextTask() === t)) { freeze(); setTimeout(hit, 220); } };
           document.addEventListener("pointerdown", h, true); document.addEventListener("click", h, true);
           offs.push(() => { document.removeEventListener("pointerdown", h, true); document.removeEventListener("click", h, true); });
         } else {
+          if (t.aim) {
+            const pd = (e) => { if (!tip.contains(e.target) && e.target.closest?.(t.aim) && nextTask() === t) freeze(); };
+            document.addEventListener("pointerdown", pd, true);
+            offs.push(() => document.removeEventListener("pointerdown", pd, true));
+          }
           const id = setInterval(() => { try { if ((s().anyOrder ? usable(t) : nextTask() === t) && t.until(ctx)) hit(); } catch (e) {} }, 200);
           offs.push(() => clearInterval(id));
         }
@@ -955,7 +949,7 @@
       if (busy || !tour) return;
       if (n >= STEPS.length) return finish();
       if (n < 0) return;
-      busy = true; off(); scrollStop?.(); mergeSplit(); release(false);
+      busy = true; off(); scrollStop?.(); mergeSplit(); release(false); freeze(false);
       tip.classList.add("moving");
       await wait(i < 0 ? 0 : 200);
       if (!tour) return;
@@ -963,7 +957,6 @@
       for (const t of s().tasks || []) t.done = t.skipped = false;
       const stop = s().start?.(ctx);
       if (typeof stop === "function") offs.push(stop);
-      // Tasks you already did on the way (like opening Colors in the last step) start ticked.
       for (const t of s().tasks || []) { try { if (t.pre?.(ctx)) t.done = t.skipped = true; } catch (e) {} }
       dot.classList.toggle("hand", !!s().hand);
       spotEl.classList.toggle("center", !!s().center);
