@@ -449,7 +449,10 @@
   const syncers = [], sliders = [];
   const roundStep = (v, c, lo = c.min, hi = c.max) => +clamp(Math.round(v / c.step) * c.step, lo, hi).toFixed(4);
   const hardRange = (c) => c.hard || [c.min > 0 ? c.min / 20 : c.min === 0 ? 0 : c.min * 20, c.max * 25];
+  // Extreme values (with Safe values off) lets about a third of rolls land past the slider limits, up to three times further.
+  const extremeRange = (c) => { const [hl, hh] = hardRange(c); return [Math.max(hl, c.min > 0 ? c.min / 3 : c.min < 0 ? c.min * 3 : 0), Math.min(hh, c.max * 3)]; };
   function randomValue(c) {
+    if (P.unlock && !P.safe && Math.random() < 0.35) { const [a, b] = extremeRange(c); return roundStep(c.log && a > 0 ? a * Math.pow(b / a, Math.random()) : rnd(a, b), c, a, b); }
     const [a, b] = P.safe && c.rand ? c.rand : [c.min, c.max];
     return roundStep(c.log && a > 0 ? a * Math.pow(b / a, Math.random()) : rnd(a, b), c);
   }
@@ -2258,16 +2261,18 @@
   $("safe").onchange = (e) => { P.safe = e.target.checked; savePrefs(); toast(P.safe ? "Safe values on" : "Safe values off. Randomize uses full ranges"); };
   $("unlock").onchange = (e) => {
     if (e.target.checked) { e.target.checked = false; closeMenus(); openModal("unlockModal"); return; }
-    P.unlock = false; savePrefs(); toast("Values locked to slider ranges");
+    P.unlock = false; savePrefs(); toast("Extreme values off");
   };
   $("unlockCancel").onclick = () => closeModal("unlockModal");
-  $("unlockOk").onclick = () => { P.unlock = true; savePrefs(); $("unlock").checked = true; closeModal("unlockModal"); toast("Values unlocked"); };
+  $("unlockOk").onclick = () => { P.unlock = true; savePrefs(); $("unlock").checked = true; closeModal("unlockModal"); toast(P.safe ? "Extreme values on. Turn off Safe values to roll them too" : "Extreme values on"); };
   const settingsJSON = () => JSON.stringify({ app: "isoline", version: 5, appVersion: VERSION, settings: S }, null, 2);
   $("exportSettings").onclick = () => { closeMenus(); download(new Blob([settingsJSON()], { type: "application/json" }), `isoline-settings-${S.seed}.json`, "Settings saved"); };
   $("copySettings").onclick = async () => { closeMenus(); try { await navigator.clipboard.writeText(settingsJSON()); toast("Settings copied"); } catch (e) { toast("Clipboard blocked. Use Download"); } };
   $("importSettings").onclick = () => { closeMenus(); $("importErr").hidden = true; $("importText").value = ""; openModal("importModal"); $("importText").focus(); };
+  // Feedback goes to a Google Form, opened with the type, title and note already filled in.
   const FORM = "https://docs.google.com/forms/d/e/1FAIpQLScQT4JNpqDqKx3q5KqXzHmD-OndI_lgFQfdY9edhzA_oTxlDA/viewform";
   const FORM_FIELDS = { kind: "entry.388241095", title: "entry.2015363973", body: "entry.928120778" };
+  // Each kind maps to the form's choice with exactly the same label.
   const FB_KIND = { bug: ["Bug", "Bug Report"], idea: ["Idea", "Feature Request"], other: ["Design feedback", "Design Feedback"] };
   let fbKind = "bug";
   const pageInfo = () => {

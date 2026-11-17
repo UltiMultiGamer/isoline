@@ -272,8 +272,10 @@
 
   function boxOf(s) {
     const el = document.querySelector(s.el); if (!el) return null;
-    if (!s.inner || !el.children.length) return el.getBoundingClientRect();
-    const rs = [...el.children].map((c) => c.getBoundingClientRect()).filter((r) => r.width);
+    const many = s.el.includes(",");
+    if (!many && (!s.inner || !el.children.length)) return el.getBoundingClientRect();
+    const rs = (many ? [...document.querySelectorAll(s.el)] : [...el.children]).map((c) => c.getBoundingClientRect()).filter((r) => r.width);
+    if (!rs.length) return el.getBoundingClientRect();
     const l = Math.min(...rs.map((r) => r.left)), t = Math.min(...rs.map((r) => r.top)), r = Math.max(...rs.map((q) => q.right)), b = Math.max(...rs.map((q) => q.bottom));
     return { left: l, top: t, right: r, bottom: b, width: r - l, height: b - t };
   }
@@ -414,6 +416,20 @@
   // Guided tours (home and Studio): chapters with a checklist of things to try. Each check ticks off when you do it,
   // the spotlight moves to the next one, and the chapter moves on by itself once its list is done.
   const fxCount = () => root.Studio?.state?.().fxOrder?.length || 0;
+  const shown = (sel) => { const n = document.querySelector(sel); return !!n && n.getClientRects().length > 0; };
+  const sizeOf = () => { const st = root.Studio?.state?.(); return st ? st.w + "x" + st.h : ""; };
+  const hasHandles = () => !!document.querySelector("#ov:not(.off) .pt, #ov:not(.off) .fc, #ov:not(.off) .ob");
+  // Counts a real drag of a canvas handle: pressed on one and moved a few pixels.
+  function watchCanvas(c) {
+    c.size0 = sizeOf();
+    const ov = document.getElementById("ov"); if (!ov) return;
+    let p0 = null;
+    const dn = (e) => { if (e.target.closest?.(".pt, .rs, .fc, .fc2, .fr, .ff, .fa, .ob, .obs, .obr")) p0 = [e.clientX, e.clientY]; };
+    const mv = (e) => { if (p0 && Math.hypot(e.clientX - p0[0], e.clientY - p0[1]) > 8) c.dragged = true; };
+    const up = () => (p0 = null);
+    ov.addEventListener("pointerdown", dn, true); addEventListener("pointermove", mv, true); addEventListener("pointerup", up, true);
+    return () => { ov.removeEventListener("pointerdown", dn, true); removeEventListener("pointermove", mv, true); removeEventListener("pointerup", up, true); };
+  }
   const GUIDED = {
     home: [
       { center: true, hand: true, t: "Hi! Welcome to Isoline!", p: "Isoline keeps three tools in one tab: a Studio for patterns, gradients and motion, Palettes for finding colors, and Components for turning those colors into a UI kit. This quick look around the home page ends in the Studio, where a second short tour takes over.", next: "Show me around", skip: "Not now" },
@@ -426,18 +442,35 @@
         tasks: [{ label: "Open the Studio", click: '.home [data-go="studio"]' }], ok: "Opening the Studio for you." },
     ],
     studio: [
-      { el: ".app > .slots", t: "Your design lives in layers", p: "The Build panel stacks everything that makes up your design, from the preset at the top down to motion at the bottom, and choosing any tile opens that layer's options in their own panel.",
-        tasks: [{ label: "Open any layer", click: ".app > .slots [data-slot]" }], ok: "That layer's options are open now." },
-      { el: '[data-slot="colors"]', t: "Give it new colors", p: "Open the Colors layer and pick one of the palettes listed under your current colors, and the canvas repaints the moment you click.",
-        tasks: [{ label: "Open the Colors layer", click: '[data-slot="colors"]' }, { label: "Pick a palette", click: "#palettes .pal", el: "#palettes", side: true }], ok: "Every preview in the panel picked up the new colors too." },
-      { el: "#surprise", view: ".app > .stage", t: "Roll a whole new look", p: "Surprise draws a fresh look from the presets each time you press it, and Undo next to it takes you back whenever the old one was better.",
-        tasks: [{ label: "Press Surprise", click: "#surprise" }, { label: "Press Undo to step back", click: "#undo", el: "#undo" }], ok: "Redo brings the rolled look back if you liked it after all." },
-      { el: '[data-slot="motion"]', t: "Set it in motion", p: "Any design you make can move, which is the part most people miss on a first visit, so open Motion and pick one of the options to watch your canvas come to life.", media: "motion:drift",
-        tasks: [{ label: "Open the Motion layer", click: '[data-slot="motion"]' }, { label: "Pick a motion", until: () => (root.Studio?.state?.().motion?.type || "still") !== "still", el: "#motionType", aim: '#motionType button:not(.on)', side: true }], ok: "Your canvas plays the motion now, and Export can save it as a video or GIF." },
-      { el: '[data-slot="addfx"]', t: "Stack an effect", p: "Effects sit on top of your design in the order you add them, from glass and blur to print textures, and each one keeps its settings while you hide it.", start: (c) => (c.fx0 = fxCount()),
+      { el: ".app > .slots", t: "Build panel", p: "The Build panel contains the layers which make up your design. Clicking on any one of the tiles opens the options of the corresponding layer.",
+        tasks: [{ label: "Open any layer", click: ".app > .slots [data-slot]" }], ok: "That layer's options are open now, in a panel of their own." },
+      { el: '[data-slot="colors"]', t: "Layer options", p: "Let's open the [Colors] layer, and pick one of the Curated palettes.",
+        start: () => document.querySelector('#palTabs [data-v="Curated"]:not(.on)')?.click(),
+        tasks: [{ label: "Open the Colors layer", click: '[data-slot="colors"]', pre: () => shown("#palettes") },
+          { label: "Pick a palette", click: "#palettes .pal", el: "#palettes", side: true, p: "Now, let's pick a new palette.", pSkip: "Your [Colors] layer is already open, so let's pick one of the Curated palettes." }],
+        ok: "Good job! Note that when we change certain settings, layer previews change accordingly.",
+        hints: [{ el: "#slotList .tile-th", max: 3 }] },
+      { el: "#variation, #surprise", view: ".app > .stage", t: "Rolling new looks", anyOrder: true,
+        p: "[Surprise] draws a new look from presets with somewhat randomized settings.\nThe [Variation] button just slightly changes the look.",
+        tasks: [{ label: "Press Surprise", click: "#surprise" }, { label: "Press Variation", click: "#variation" }],
+        ok: "If you are feeling really random, you can turn off “Safe values” and turn on “Extreme values” in the settings for true randomness.",
+        hints: [{ el: "#settingsBtn" }] },
+      { el: "#undo, #redo", view: ".app > .stage", t: "Undo and redo", p: "If you liked the look you had, you can always undo or redo.",
+        tasks: [{ label: "Press Undo", click: "#undo" }, { label: "Press Redo", click: "#redo" }], ok: "Your keyboard's undo and redo shortcuts work here too." },
+      { el: '[data-slot="motion"]', t: "Animating designs", p: "Any design you make can move, I'm tired of explaining this to people, so let's open [Motion], and pick an option to watch your canvas come to life!", media: "motion:drift",
+        tasks: [{ label: "Open the Motion layer", click: '[data-slot="motion"]', pre: () => shown("#motionType") }, { label: "Pick a motion", until: () => (root.Studio?.state?.().motion?.type || "still") !== "still", el: "#motionType", aim: '#motionType button:not(.on)', side: true }], ok: "Your canvas plays the motion now, and Export can save it as a video or GIF." },
+      { el: '[data-slot="addfx"]', t: "Stacking effects", p: "Effects sit on top of your design in the order you add them, from glass and blur to print textures, and some of them have special interactions with Motion and other Effects.", start: (c) => (c.fx0 = fxCount()),
         tasks: [{ label: "Open Add effect", click: '[data-slot="addfx"]' }, { label: "Add any effect from the gallery", until: (c) => fxCount() > c.fx0, el: "#fxGallery", aim: "#fxGallery .fx-card", side: true }], ok: "Drag an effect tile up or down to change the order." },
-      { el: "#wrap", t: "Work right on the canvas", p: "You can drag points, objects and effect handles directly on the canvas, and pulling its edges resizes the design without leaving the Studio.", media: "mesh-drag" },
-      { el: "#exportBtn", t: "Take it anywhere", p: "Export saves your design as a PNG, SVG, video, GIF or a live HTML file, and Share copies a link or a brief your AI agent can build from." },
+      { el: "#wrap", t: "Canvas nodes", p: "You can drag points, objects and effect handles directly on the canvas, and the canvas itself can be resized by dragging the edges. {Click here} for a preset with handles.",
+        action: () => root.Studio?.usePreset?.("Dusk"), start: watchCanvas,
+        tasks: [{ label: "Drag a handle", until: (c) => c.dragged, need: hasHandles, why: "This design has none yet", el: "#art", aim: "#ov .pt, #ov .fc, #ov .ob" },
+          { label: "Resize the canvas", until: (c) => sizeOf() !== c.size0, el: "#wrap", aim: ".rz-e" }],
+        ok: "For fine tuning, you can manually change the size of the canvas in the navbar, and the position of things in the layer settings.",
+        hints: [{ el: ".top .size" }, { el: ".app > .options" }] },
+      { el: "#designsBtn, #shareBtn, #exportBtn, .top-right .pop:not([hidden])", side: true, t: "Exporting and sharing", anyOrder: true,
+        p: "Export your design in whatever file is convenient for you. You can share your designs with friends, and save them locally in-browser or on-device.",
+        tasks: [{ label: "Check out Export", click: "#exportBtn" }, { label: "Check out Share", click: "#shareBtn" }, { label: "Check out Designs", click: "#designsBtn" }],
+        ok: "Designs also keeps a version of each save, so an older take is never lost." },
       { center: true, finale: true, t: "You're ready to make something", p: "Everything you made during the tour is still on your canvas, and Settings can replay this tour whenever you want a refresher.", next: "Start designing" },
     ],
   };
@@ -481,10 +514,15 @@
     if (moving) root.Shell?.go(name);
     const spotEl = document.createElement("div"), tip = document.createElement("div"), dot = document.createElement("div");
     spotEl.className = "tour-spot js"; tip.className = "tour-tip v3"; dot.className = "tp tour-dot";
+    // The dim layer: one sheet with a cut-out for the outline and one for each hint, plus the dashed hint rings and arrows.
+    const NS = "http://www.w3.org/2000/svg", vid = "tvm" + Math.random().toString(36).slice(2, 8), veil = document.createElementNS(NS, "svg");
+    veil.setAttribute("class", "tour-veil"); veil.setAttribute("aria-hidden", "true");
+    veil.innerHTML = `<defs><mask id="${vid}" maskUnits="userSpaceOnUse" x="0" y="0" width="100%" height="100%"><rect width="100%" height="100%" fill="#fff"/><g class="tv-holes"></g></mask></defs><rect class="tv-dim" width="100%" height="100%" mask="url(#${vid})"/><g class="tv-trails"></g><g class="tv-rings"></g>`;
+    const holesG = veil.querySelector(".tv-holes"), trailsG = veil.querySelector(".tv-trails"), ringsG = veil.querySelector(".tv-rings");
     tip.setAttribute("role", "dialog"); tip.setAttribute("aria-live", "polite");
     dot.innerHTML = handHTML(); dot.setAttribute("aria-label", T("Show it"));
     { const sk = dot.querySelector(".tp-skin"), mk = handMask(); sk.style.webkitMaskImage = mk; sk.style.maskImage = mk; sk.style.backgroundImage = `url("${marbleURL()}")`; }
-    document.body.append(spotEl, tip, dot);
+    document.body.append(veil, spotEl, tip, dot);
     const touch = matchMedia("(pointer: coarse)").matches;
     if (touch) dot.classList.add("touch");
     // A softer, slower spring for the guided tours.
@@ -497,9 +535,10 @@
     let i = -1, busy = false, offs = [], ctx = {}, doneT = 0, alive = true, away = null, raf = 0;
     const off = () => { offs.forEach((f) => f()); offs = []; clearTimeout(doneT); };
     const s = () => STEPS[i];
-    const nextTask = () => (s()?.tasks || []).find((t) => !t.done);
+    const usable = (t) => !t.need || t.need(ctx);
+    const nextTask = () => (s()?.tasks || []).find((t) => !t.done && usable(t));
     // The next thing to do, or once the list is done, the last thing done, so the spotlight stays put while you read.
-    const target = () => { const ts = s()?.tasks || [], t = nextTask() || ts[ts.length - 1]; return t?.el ? { el: t.el, side: t.side } : s(); };
+    const target = () => { const ts = s()?.tasks || [], t = nextTask() || [...ts].reverse().find((x) => x.done) || ts[ts.length - 1]; return t?.el ? { el: t.el, side: t.side } : s(); };
     dot.addEventListener("click", () => { if (away) point(); });
 
     // Everything that follows a target runs here, once per frame: the spotlight eases to a new target and then
@@ -549,7 +588,8 @@
           if (tg.side || y < m) { y = Math.min(innerHeight - th - m, Math.max(m, r.top + r.height / 2 - th / 2)); x = r.right + 14 + tw < innerWidth - m ? r.right + 14 : r.left - tw - 14; }
           moveTip(Math.max(m, Math.min(innerWidth - tw - m, x)), Math.max(m, Math.min(innerHeight - th - m, y)), el !== lastEl);
         }
-        const dir = r.bottom < 10 ? "up" : r.top > floor - 10 ? "down" : null;
+        // While the outline is split into hints, the pointers belong to the hints, so no off-screen arrow.
+        const dir = split && !split.merging ? null : r.bottom < 10 ? "up" : r.top > floor - 10 ? "down" : null;
         setAway(dir);
         // Point at something you can actually press: the first visible match for the task inside the outline.
         const hit = clickable(r, floor);
@@ -564,7 +604,128 @@
       // Pointer: ride along with the target while it scrolls, then spring toward its spot.
       anchor = r ? [r.left, r.top] : null;
       lastEl = el;
-      if (aim) cur.aim(aim[0], aim[1], !!st.center);
+      paintHoles([box, ...drawSplit(aim)]);
+      if (aim && (!split || split.merging)) cur.aim(aim[0], aim[1], !!st.center);
+    }
+
+    // Cut-outs in the dim layer, one per box, with the outline's rounded corners.
+    const holeEls = [];
+    const lerpBox = (a, b, e) => ({ l: a.l + (b.l - a.l) * e, t: a.t + (b.t - a.t) * e, w: a.w + (b.w - a.w) * e, h: a.h + (b.h - a.h) * e });
+    const setRect = (n, b, rx) => {
+      const w = Math.max(0, b.w), h = Math.max(0, b.h);
+      n.setAttribute("x", b.l.toFixed(1)); n.setAttribute("y", b.t.toFixed(1)); n.setAttribute("width", w.toFixed(1)); n.setAttribute("height", h.toFixed(1)); n.setAttribute("rx", Math.min(rx, w / 2, h / 2).toFixed(1));
+    };
+    const paintHoles = (list) => {
+      while (holeEls.length < list.length) { const n = document.createElementNS(NS, "rect"); n.setAttribute("fill", "#000"); holesG.appendChild(n); holeEls.push(n); }
+      holeEls.forEach((n, k) => setRect(n, list[k] || { l: 0, t: 0, w: 0, h: 0 }, 14));
+    };
+
+    // The "by the way" part of a step: the outline splits into dashed rings around each hint, and the pointer splits
+    // with it. On wide screens each pointer draws a looping arrow on its way and settles into the arrowhead; on small
+    // screens the pointers simply move onto the hints. Moving on merges everything back into the one outline and pointer.
+    let split = null;
+    const endAt = (S, b) => {
+      const qx = Math.max(b.l, Math.min(b.l + b.w, S[0])), qy = Math.max(b.t, Math.min(b.t + b.h, S[1])), dx = S[0] - qx, dy = S[1] - qy, d = Math.hypot(dx, dy);
+      return d < 1 ? [b.l + b.w / 2, b.t - 10] : [qx + (dx / d) * 9, qy + (dy / d) * 9];
+    };
+    // A bowed path with one cursive loop in the middle, bulging the same way as the bow.
+    const swirlAt = (S, E, sg, t) => {
+      const dx = E[0] - S[0], dy = E[1] - S[1], d = Math.hypot(dx, dy) || 1, nx = (-dy / d) * sg, ny = (dx / d) * sg, bow = 0.2 * d;
+      const cx = (S[0] + E[0]) / 2 + nx * bow, cy = (S[1] + E[1]) / 2 + ny * bow, u = 1 - t;
+      let x = u * u * S[0] + 2 * u * t * cx + t * t * E[0], y = u * u * S[1] + 2 * u * t * cy + t * t * E[1];
+      const R = Math.min(20, d * 0.09), a = 0.3, b = 0.64;
+      if (R > 5 && t > a && t < b) {
+        const q = (t - a) / (b - a), sm = q * q * (3 - 2 * q), th0 = Math.atan2(-ny, -nx), dir = -Math.sign(-Math.sin(th0) * dx + Math.cos(th0) * dy) || 1, th = th0 + dir * Math.PI * 2 * sm;
+        x += R * (Math.cos(th) - Math.cos(th0)); y += R * (Math.sin(th) - Math.sin(th0));
+      }
+      return [x, y];
+    };
+    const trailD = (it, e) => { const n = Math.max(2, Math.ceil(56 * e)); let d = ""; for (let j = 0; j <= n; j++) { const [x, y] = swirlAt(it.S, it.E, it.sg, (e * j) / n); d += (j ? "L" : "M") + x.toFixed(1) + " " + y.toFixed(1); } return d; };
+    const headD = (it) => { const [x1, y1] = it.E, [x0, y0] = swirlAt(it.S, it.E, it.sg, 0.95), a = Math.atan2(y1 - y0, x1 - x0), L = 9, w = 0.52; return `M${(x1 - L * Math.cos(a - w)).toFixed(1)} ${(y1 - L * Math.sin(a - w)).toFixed(1)}L${x1.toFixed(1)} ${y1.toFixed(1)}L${(x1 - L * Math.cos(a + w)).toFixed(1)} ${(y1 - L * Math.sin(a + w)).toFixed(1)}`; };
+    function startSplit() {
+      const st = s();
+      if (!st.hints) return false;
+      dropSplit();
+      const floorY = docked() && !sideDock() ? tip.getBoundingClientRect().top - 6 : innerHeight, els = [];
+      for (const h of st.hints) {
+        let n = 0;
+        for (const e of document.querySelectorAll(h.el)) {
+          if (n >= (h.max || 1)) break;
+          const b = e.getBoundingClientRect();
+          if (!b.width || b.bottom < 6 || b.top > floorY - 12 || b.right < 0 || b.left > innerWidth) continue;
+          els.push(e); n++;
+        }
+      }
+      if (!els.length) return false;
+      const arrows = !docked() && !reduce.matches, P0 = cur.pos.slice(), from = { ...box }, tb = tip.getBoundingClientRect();
+      // An arrow that would start under the card starts at the card's edge instead, on the side facing its hint.
+      const startFor = (el) => {
+        const [x, y] = P0;
+        if (x < tb.left || x > tb.right || y < tb.top || y > tb.bottom) return P0;
+        const b = el.getBoundingClientRect(), dx = b.left + b.width / 2 - x, dy = b.top + b.height / 2 - y;
+        const k = Math.min(dx > 0 ? (tb.right - x) / dx : dx < 0 ? (tb.left - x) / dx : Infinity, dy > 0 ? (tb.bottom - y) / dy : dy < 0 ? (tb.top - y) / dy : Infinity), d = Math.hypot(dx, dy) || 1;
+        return [x + dx * k + (dx / d) * 10, y + dy * k + (dy / d) * 10];
+      };
+      split = { arrows, t0: performance.now(), merging: null, items: els.map((el, k) => {
+        const S = arrows ? startFor(el) : P0;
+        let d = dot, ptr = cur;
+        if (k) { d = document.createElement("div"); d.className = "tp tour-dot clone"; document.body.appendChild(d); ptr = pointer(d, 0.03, 0.5); ptr.place(P0[0], P0[1]); }
+        const ring = document.createElementNS(NS, "rect"); ring.setAttribute("class", "tv-ring"); ring.style.opacity = 0; ringsG.appendChild(ring);
+        const it = { el, d, ptr, ring, from, box: { ...from }, sg: k % 2 ? -1 : 1, S, E: S, dur: 0 };
+        if (arrows) {
+          it.g = document.createElementNS(NS, "g"); it.g.setAttribute("class", "tv-trail");
+          it.g.innerHTML = `<path class="tv-halo tv-ln"/><path class="tv-line tv-ln"/><path class="tv-halo tv-hd"/><path class="tv-line tv-hd"/>`;
+          trailsG.appendChild(it.g);
+          const b = el.getBoundingClientRect();
+          it.dur = Math.min(1150, 620 + Math.hypot(b.left + b.width / 2 - S[0], b.top + b.height / 2 - S[1]) * 0.55);
+        }
+        return it;
+      }) };
+      spotEl.classList.add("tour-split"); dot.classList.add("rest");
+      return true;
+    }
+    function drawSplit(mainAim) {
+      if (!split) return [];
+      const now = performance.now(), m = split.merging, P = m ? Math.min(1, (now - m.t0) / 620) : 0, E = inOut(P), holes = [];
+      split.items.forEach((it, k) => {
+        const b = it.el.isConnected ? it.el.getBoundingClientRect() : null, pad = 5;
+        if (b && b.width) it.goal = { l: b.left - pad, t: b.top - pad, w: b.width + pad * 2, h: b.height + pad * 2 };
+        const goal = it.goal || it.box, age = now - split.t0 - k * 90;
+        it.box = m ? lerpBox(m.from[k], box, E) : lerpBox(it.from, goal, inOut(Math.min(1, Math.max(0, age / 640))));
+        setRect(it.ring, it.box, 12);
+        it.ring.style.opacity = m ? 1 - E : Math.min(1, Math.max(0, age / 220));
+        holes.push(it.box);
+        if (m) {
+          const to = mainAim || cur.pos;
+          if (it.ptr !== cur) it.ptr.aim(to[0], to[1]);
+          if (it.g) it.g.style.opacity = 1 - E;
+          return;
+        }
+        if (!split.arrows) { it.ptr.aim(goal.l + goal.w / 2, goal.t + goal.h / 2); return; }
+        it.E = endAt(it.S, goal);
+        const t = Math.min(1, Math.max(0, (now - split.t0 - k * 140) / it.dur)), e = inOut(t), line = trailD(it, e), head = headD(it);
+        for (const n of it.g.querySelectorAll(".tv-ln")) n.setAttribute("d", line);
+        for (const n of it.g.querySelectorAll(".tv-hd")) n.setAttribute("d", head);
+        if (t < 1) { const [x, y] = swirlAt(it.S, it.E, it.sg, e); it.ptr.place(x, y); }
+        else if (!it.sunk) { it.sunk = true; it.d.classList.add("sunk"); it.g.classList.add("head"); }
+      });
+      if (m && P >= 1) dropSplit();
+      return holes;
+    }
+    function mergeSplit() {
+      if (!split || split.merging) return;
+      split.merging = { t0: performance.now(), from: split.items.map((it) => ({ ...it.box })) };
+      for (const it of split.items) { it.d.classList.remove("sunk"); it.g?.classList.remove("head"); }
+      spotEl.classList.remove("tour-split"); dot.classList.remove("rest");
+    }
+    function dropSplit() {
+      if (!split) return;
+      for (const it of split.items) {
+        it.ring.remove(); it.g?.remove();
+        if (it.ptr === cur) { it.d.classList.remove("sunk"); continue; }
+        it.ptr.stop(); it.d.classList.add("gone"); const d = it.d; setTimeout(() => d.remove(), 320);
+      }
+      split = null; spotEl.classList.remove("tour-split"); dot.classList.remove("rest");
     }
     function clickable(r, floor) {
       const ts = s()?.tasks || [], t = nextTask() || ts[ts.length - 1], sel = t?.aim || t?.click;
@@ -638,23 +799,58 @@
       dot.animate([{ scale: 1 }, { scale: 1.45 }, { scale: 1 }], { duration: 420, easing: "cubic-bezier(.3,1.5,.5,1)" });
       if (touch) { dot.classList.add("rest"); setTimeout(() => dot.classList.remove("rest"), 900); }
     };
+    // Descriptions: [word] marks a control by name, {text} is a link that runs the step's action, and a new line breaks.
+    const esc = (x) => String(x).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+    const rich = (x) => esc(T(x)).replace(/\[([^\]]+)\]/g, '<u class="tour-term">$1</u>').replace(/\{([^}]+)\}/g, '<button type="button" class="tour-link" data-a="do">$1</button>').replace(/\n/g, "<br>");
+    // What the description says right now: the step's text, the next task's own line once earlier ones are done,
+    // or the step's result once everything is.
+    const descFor = () => {
+      const st = s(), ts = st.tasks || [], nt = nextTask();
+      if (!ts.length) return st.p;
+      if (!nt) return ts.some((t) => t.done) ? st.ok || st.p : st.p;
+      const k = ts.indexOf(nt);
+      if (st.anyOrder || !nt.p || k === 0) return st.p;
+      return nt.pSkip && ts.slice(0, k).every((t) => t.skipped) ? nt.pSkip : nt.p;
+    };
+    // A new description fades in tinted with the accent, then settles to the normal text color: one pulse.
+    const setDesc = (x, pulse) => {
+      const p = tip.querySelector(".tour-desc");
+      if (!p || !x || p._x === x) return;
+      const first = p._x == null; p._x = x; p.innerHTML = rich(x);
+      if (!pulse || first || reduce.matches) return;
+      const a = getComputedStyle(tip).getPropertyValue("--accent").trim() || "#e8572a", n = getComputedStyle(p).color;
+      p.animate([{ color: a, opacity: 0, translate: "0 4px" }, { color: a, opacity: 1, translate: "0 0", offset: 0.2 }, { color: a, offset: 0.42 }, { color: n }], { duration: 1500, easing: "cubic-bezier(.3,.6,.4,1)" });
+    };
+    // Keeps the list in step with the page: which task is next, which can't be done yet, and the matching text.
+    const refresh = () => {
+      if (tip.classList.contains("done")) return;
+      const nt = nextTask();
+      (s().tasks || []).forEach((t, k) => { const li = tip.querySelector(`li[data-k="${k}"]`); if (!li) return; li.classList.toggle("off", !t.done && !usable(t)); li.classList.toggle("cur", t === nt); });
+      setDesc(descFor(), true);
+    };
     const tick = (t, li) => {
       t.done = true; li.classList.add("done"); li.classList.remove("cur");
       pop();
       if (!reduce.matches) li.querySelector(".tk").animate([{ scale: 0.6 }, { scale: 1.22 }, { scale: 1 }], { duration: 420, easing: "cubic-bezier(.3,1.5,.5,1)" });
-      if (nextTask()) { tip.querySelector("li:not(.done)")?.classList.add("cur"); setTimeout(point, 250); return; }
+      if (nextTask()) { refresh(); setTimeout(point, 250); return; }
       finished();
     };
     const finished = () => {
-      const ok = tip.querySelector(".tour-ok"), bar = tip.querySelector(".tour-prog i");
+      if (tip.classList.contains("done")) return;
+      const bar = tip.querySelector(".tour-prog i");
       if (bar) bar.style.width = (chapterOf(i) / N) * 100 + "%";
+      tip.querySelectorAll(".tour-tasks li").forEach((li) => li.classList.remove("cur"));
       tip.classList.add("done");
-      if (ok) {
-        ok.hidden = false;
-        if (!reduce.matches) ok.animate([{ opacity: 0, translate: "0 8px", scale: 0.96 }, { opacity: 1, translate: "0 0", scale: 1 }], { duration: 420, easing: "cubic-bezier(.22,1,.36,1)" });
+      setDesc(s().ok, true);
+      let hinted = startSplit();
+      // Hints off screen (the layer previews sit above the panel on a phone): scroll them into view, then split.
+      if (!hinted && s().hints) {
+        const h = document.querySelector(s().hints[0].el), at = i;
+        hinted = !!h;
+        if (h) (async () => { await wait(600); if (!tour || i !== at) return; pad(); await reveal(h, 12, docked() && !sideDock() ? tip.getBoundingClientRect().top - 12 : innerHeight - 12); if (tour && i === at && tip.classList.contains("done")) startSplit(); })();
       }
       if (!reduce.matches) tip.animate([{ boxShadow: "var(--pop), 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent)" }, { boxShadow: "var(--pop), 0 0 0 10px transparent" }], { duration: 700, easing: "ease-out" });
-      const nx = tip.querySelector('[data-a="next"]'), wait2 = s().tasks?.some((t) => t.click === '.home [data-go="studio"]') ? 0 : 3200;
+      const nx = tip.querySelector('[data-a="next"]'), wait2 = s().tasks?.some((t) => t.click === '.home [data-go="studio"]') ? 0 : hinted ? 4800 : 3400;
       nx.querySelector("span").textContent = T(s().next || "Next"); nx.classList.replace("ghost", "primary");
       if (!wait2) return;
       const fill = nx.querySelector(".cd");
@@ -668,41 +864,48 @@
         const hit = () => { if (t.done || !tour) return; const li = tip.querySelector(`li[data-k="${k}"]`); if (li) tick(t, li); };
         if (t.click) {
           // Earlier tasks first: a click only counts once the list reaches it.
-          const h = (e) => { if (!tip.contains(e.target) && e.target.closest?.(t.click) && nextTask() === t) setTimeout(hit, 220); };
+          const h = (e) => { if (!tip.contains(e.target) && e.target.closest?.(t.click) && (s().anyOrder ? !t.done && usable(t) : nextTask() === t)) setTimeout(hit, 220); };
           document.addEventListener("pointerdown", h, true); document.addEventListener("click", h, true);
           offs.push(() => { document.removeEventListener("pointerdown", h, true); document.removeEventListener("click", h, true); });
         } else {
-          const id = setInterval(() => { try { if (nextTask() === t && t.until(ctx)) hit(); } catch (e) {} }, 200);
+          const id = setInterval(() => { try { if ((s().anyOrder ? usable(t) : nextTask() === t) && t.until(ctx)) hit(); } catch (e) {} }, 200);
           offs.push(() => clearInterval(id));
         }
       });
+      const rid = setInterval(refresh, 300);
+      offs.push(() => clearInterval(rid));
     };
     const render = () => {
       const st = s(), ch = chapterOf(i);
       const head = st.center ? "" : `<div class="tour-prog"><i style="width:${((ch - (st.tasks ? 1 : 0)) / N) * 100}%"></i></div><span class="tour-kicker">${T("Step")} ${ch} ${T("of")} ${N}</span>`;
-      const tasks = st.tasks ? `<ul class="tour-tasks">${st.tasks.map((t, k) => `<li data-k="${k}" class="${k === 0 ? "cur" : ""}"><span class="tk">${CHECK}</span><span>${T(t.label)}</span></li>`).join("")}</ul>` : "";
-      const okLine = st.ok ? `<p class="tour-ok" hidden><svg class="ok-spark" viewBox="0 0 20 20" aria-hidden="true"><path d="M10 1.5c.6 4.6 3.9 7.9 8.5 8.5-4.6.6-7.9 3.9-8.5 8.5-.6-4.6-3.9-7.9-8.5-8.5 4.6-.6 7.9-3.9 8.5-8.5Z"/></svg><span>${T(st.ok)}</span></p>` : "";
+      const nt = nextTask();
+      const tasks = st.tasks ? `<ul class="tour-tasks">${st.tasks.map((t, k) => `<li data-k="${k}" class="${t.done ? "done" : t === nt ? "cur" : !usable(t) ? "off" : ""}"><span class="tk">${CHECK}</span><span>${T(t.label)}${t.why ? `<em class="tk-why">${T(t.why)}</em>` : ""}</span></li>`).join("")}</ul>` : "";
       tip.classList.toggle("hero", !!st.center); tip.classList.remove("done");
       const back = STEPS.slice(0, i).some((x) => !x.center) && !st.finale;
-      tip.innerHTML = `${head}<b>${T(st.t)}</b><p>${T(st.p)}</p>${tasks}${okLine}<div class="tour-acts">${st.finale ? "" : `<button class="btn sm ghost" data-a="end">${T(st.skip || "End tour")}</button>`}<span class="grow"></span>${back ? `<button class="btn sm" data-a="back">${T("Back")}</button>` : ""}<button class="btn sm ${st.tasks ? "ghost" : "primary"}" data-a="next"><i class="cd"></i><span>${T(st.tasks ? "Skip" : st.next || "Next")}</span></button></div>`;
+      tip.innerHTML = `${head}<b>${T(st.t)}</b><p class="tour-desc"></p>${tasks}<div class="tour-acts">${st.finale ? "" : `<button class="btn sm ghost" data-a="end">${T(st.skip || "End tour")}</button>`}<span class="grow"></span>${back ? `<button class="btn sm" data-a="back">${T("Back")}</button>` : ""}<button class="btn sm ${st.tasks ? "ghost" : "primary"}" data-a="next"><i class="cd"></i><span>${T(st.tasks ? "Skip" : st.next || "Next")}</span></button></div>`;
+      setDesc(descFor(), false);
       if (st.media) tip.insertBefore(mediaFor(st.media), tip.querySelector("p"));
     };
     const go = async (n) => {
       if (busy || !tour) return;
       if (n >= STEPS.length) return finish();
       if (n < 0) return;
-      busy = true; off(); scrollStop?.();
+      busy = true; off(); scrollStop?.(); mergeSplit();
       tip.classList.add("moving");
       await wait(i < 0 ? 0 : 200);
       if (!tour) return;
       i = n; ctx = {};
-      for (const t of s().tasks || []) t.done = false;
-      s().start?.(ctx);
+      for (const t of s().tasks || []) t.done = t.skipped = false;
+      const stop = s().start?.(ctx);
+      if (typeof stop === "function") offs.push(stop);
+      // Tasks you already did on the way (like opening Colors in the last step) start ticked.
+      for (const t of s().tasks || []) { try { if (t.pre?.(ctx)) t.done = t.skipped = true; } catch (e) {} }
       dot.classList.toggle("hand", !!s().hand);
       spotEl.classList.toggle("center", !!s().center);
       render(); pad();
       tip.classList.remove("moving");
       arm();
+      if (s().tasks?.length && !nextTask() && s().tasks.every((t) => t.done)) finished();
       tip.querySelector('[data-a="next"]').focus({ preventScroll: true });
       busy = false;
       if (s().finale && !reduce.matches) { const r = tip.getBoundingClientRect(); for (let k = 0; k < 3; k++) setTimeout(() => root.sparks?.(r.left + r.width * (0.2 + 0.3 * k), r.top + 6), k * 140); }
@@ -710,10 +913,10 @@
     };
     const cleanup = () => {
       alive = false; cancelAnimationFrame(raf);
-      off(); scrollStop?.(); document.body.classList.remove("touring"); document.documentElement.classList.remove("tour-docked");
+      off(); scrollStop?.(); dropSplit(); document.body.classList.remove("touring"); document.documentElement.classList.remove("tour-docked");
       removeEventListener("keydown", key, true);
       tour = null;
-      for (const n of [spotEl, tip]) { n.classList.add("gone"); setTimeout(() => n.remove(), 320); }
+      for (const n of [spotEl, tip, veil]) { n.classList.add("gone"); setTimeout(() => n.remove(), 320); }
     };
     const end = () => { cleanup(); cur.stop(); dot.classList.add("gone"); setTimeout(() => dot.remove(), 320); };
     const finish = async () => {
@@ -722,7 +925,7 @@
       await swirlHome(cur, dot);
     };
     const key = (e) => { if (e.key === "Escape") { e.stopPropagation(); end(); } else if (e.key === "ArrowRight") go(i + 1); else if (e.key === "ArrowLeft") go(i - 1); };
-    tip.onclick = (e) => { const a = e.target.closest("[data-a]")?.dataset.a; if (a === "next") go(i + 1); else if (a === "back") go(i - 1); else if (a === "end") end(); };
+    tip.onclick = (e) => { const a = e.target.closest("[data-a]")?.dataset.a; if (a === "next") go(i + 1); else if (a === "back") go(i - 1); else if (a === "end") end(); else if (a === "do") { s().action?.(ctx); setTimeout(refresh, 400); } };
     addEventListener("keydown", key, true);
     tour = { end, name };
     document.body.classList.add("touring");
