@@ -120,6 +120,7 @@
       <div class="menu-wrap">
         <button class="ib lg" id="settingsBtn" title="Settings" aria-label="Settings" aria-haspopup="true"><svg class="ic"><use href="#i-gear"/></svg></button>
         <div class="pop settings" id="settingsMenu" hidden>
+          <div class="set-head"><b>Settings</b><button class="ib xs" id="settingsClose" aria-label="Close" data-tip="Close"><svg class="ic"><use href="#i-x"/></svg></button></div>
           <label class="set-row" for="safe">
             <span><b>Safe values</b><small>Randomize within clean ranges</small></span>
             <span class="switch"><input type="checkbox" id="safe"><span></span></span>
@@ -137,17 +138,13 @@
           <div class="set-row static"><span><b>Theme</b></span><div class="seg sm icons" id="theme"><button data-v="light" data-tip="Light" aria-label="Light"><svg class="ic"><use href="#i-sun"/></svg></button><button data-v="dark" data-tip="Dark" aria-label="Dark"><svg class="ic"><use href="#i-moon"/></svg></button></div></div>
           <div class="set-row static"><span><b>Accent</b></span><div class="accents" id="accents"></div></div>
           <div class="set-sep"></div>
-          <button class="opt" id="perfOpen"><span><svg class="ic"><use href="#i-sliders"/></svg>Performance</span><span class="opt-note" id="perfSum"></span></button>
-          <div class="set-sep"></div>
-          <button class="opt" id="exportSettings"><span><svg class="ic"><use href="#i-down"/></svg>Download settings</span><span class="mono">.json</span></button>
-          <button class="opt" id="copySettings"><span><svg class="ic"><use href="#i-copy"/></svg>Copy settings</span></button>
-          <button class="opt" id="importSettings"><span><svg class="ic"><use href="#i-import"/></svg>Import settings</span></button>
-          <div class="set-sep"></div>
-          <button class="opt" id="changelogBtn"><span><svg class="ic"><use href="#i-history"/></svg>Changelog</span><span class="opt-note" id="changelogVer"></span></button>
-          <button class="opt" id="tourBtn"><span><svg class="ic"><use href="#i-play"/></svg>Show the tutorial</span></button>
-          <button class="opt" id="feedbackBtn"><span><svg class="ic"><use href="#i-chat"/></svg>Send feedback</span></button>
-          <button class="opt danger" id="resetAll"><span><svg class="ic"><use href="#i-reset"/></svg>Reset to defaults</span></button>
-          <div class="set-ver"><span id="verLine"></span><button class="btn sm" id="verReload" hidden>Reload</button></div>
+          <div class="set-grid">
+            <button class="opt" id="perfOpen"><span><svg class="ic"><use href="#i-sliders"/></svg>Performance</span><span class="opt-note" id="perfSum"></span></button>
+            <button class="opt" id="changelogBtn"><span><svg class="ic"><use href="#i-history"/></svg>Changelog</span><span class="opt-note" id="changelogVer"></span></button>
+            <button class="opt" id="tourBtn"><span><svg class="ic"><use href="#i-play"/></svg>Tutorial</span></button>
+            <button class="opt" id="feedbackBtn"><span><svg class="ic"><use href="#i-chat"/></svg>Feedback</span></button>
+          </div>
+          <div class="set-ver"><span id="verLine"></span><button class="btn sm" id="verReload" hidden>Reload</button><button class="set-reset" id="resetAll">Reset to defaults</button></div>
         </div>
       </div>
       <div class="menu-wrap" data-for="studio">

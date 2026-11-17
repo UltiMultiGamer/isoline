@@ -98,6 +98,8 @@ window.I18N_RU = {
   "Check out Share": "Загляните в «Поделиться»",
   "Check out Designs": "Загляните в «Дизайны»",
   "Designs also keeps a version of each save, so an older take is never lost.": "«Дизайны» хранят версию каждого сохранения, так что прежний вариант не потеряется.",
+  "Tutorial": "Обучение",
+  "Settings file": "Файл настроек",
   "Step": "Шаг",
   "of": "из",
   "Skip": "Пропустить",

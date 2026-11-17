@@ -606,6 +606,7 @@
       anchor = r ? [r.left, r.top] : null;
       lastEl = el;
       paintHoles([box, ...drawSplit(aim)]);
+      if (frozen) ride();
       if (aim && (!split || split.merging) && !frozen) cur.aim(aim[0], aim[1], !!st.center);
     }
 
@@ -700,6 +701,8 @@
         return it;
       }) };
       spotEl.classList.add("tour-split"); dot.classList.add("rest");
+      if (!arrows) for (const it of split.items) it.d.classList.add("look");
+      else for (const it of split.items) if (it.noArrow) it.d.classList.add("look");
       return true;
     }
     function drawSplit(mainAim) {
@@ -741,14 +744,14 @@
     function mergeSplit() {
       if (!split || split.merging) return;
       split.merging = { t0: performance.now(), from: split.items.map((it) => ({ ...it.box })) };
-      for (const it of split.items) { it.d.classList.remove("sunk"); it.g?.classList.remove("head"); }
+      for (const it of split.items) { it.d.classList.remove("sunk", "look"); it.g?.classList.remove("head"); }
       spotEl.classList.remove("tour-split"); dot.classList.remove("rest");
     }
     function dropSplit() {
       if (!split) return;
       for (const it of split.items) {
         it.ring.remove(); it.g?.remove();
-        if (it.ptr === cur) { it.d.classList.remove("sunk"); continue; }
+        if (it.ptr === cur) { it.d.classList.remove("sunk", "look"); continue; }
         it.ptr.stop(); it.d.classList.add("gone"); const d = it.d; setTimeout(() => d.remove(), 320);
       }
       split = null; spotEl.classList.remove("tour-split"); dot.classList.remove("rest");
@@ -767,8 +770,20 @@
       return out;
     }
     const many = [];
-    let frozen = false, fzT = 0;
-    const freeze = (on = true) => { frozen = on; clearTimeout(fzT); if (on) fzT = setTimeout(() => (frozen = false), 1400); };
+    let frozen = false, fzT = 0, fzEl = null, fzAt = null;
+    const freeze = (on = true, el = null) => {
+      frozen = on; clearTimeout(fzT);
+      if (on && el) { fzEl = el; const b = el.getBoundingClientRect(); fzAt = [b.left, b.top]; }
+      if (on) fzT = setTimeout(() => { frozen = false; fzEl = null; }, 1400); else fzEl = null;
+    };
+    const ride = () => {
+      if (!fzEl) return;
+      if (!fzEl.isConnected) { fzEl = null; return; }
+      const b = fzEl.getBoundingClientRect(), dx = b.left - fzAt[0], dy = b.top - fzAt[1];
+      if (!dx && !dy) return;
+      fzAt = [b.left, b.top]; cur.shift(dx, dy);
+      for (const m of many) m.ptr.shift(dx, dy);
+    };
     const dropMany = (keep) => {
       while (many.length) {
         const m = many.pop(); m.ptr.stop();
@@ -918,12 +933,12 @@
         const hit = () => { if (t.done || !tour) return; const li = tip.querySelector(`li[data-k="${k}"]`); if (li) tick(t, li); };
         if (t.click) {
           // Earlier tasks first: a click only counts once the list reaches it.
-          const h = (e) => { if (!tip.contains(e.target) && e.target.closest?.(t.click) && (s().anyOrder ? !t.done && usable(t) : nextTask() === t)) { freeze(); setTimeout(hit, 220); } };
+          const h = (e) => { if (!tip.contains(e.target) && e.target.closest?.(t.click) && (s().anyOrder ? !t.done && usable(t) : nextTask() === t)) { if (!frozen) freeze(true, e.target.closest(t.click)); setTimeout(hit, 220); } };
           document.addEventListener("pointerdown", h, true); document.addEventListener("click", h, true);
           offs.push(() => { document.removeEventListener("pointerdown", h, true); document.removeEventListener("click", h, true); });
         } else {
           if (t.aim) {
-            const pd = (e) => { if (!tip.contains(e.target) && e.target.closest?.(t.aim) && nextTask() === t) freeze(); };
+            const pd = (e) => { if (!tip.contains(e.target) && e.target.closest?.(t.aim) && nextTask() === t) freeze(true, e.target.closest(t.aim)); };
             document.addEventListener("pointerdown", pd, true);
             offs.push(() => document.removeEventListener("pointerdown", pd, true));
           }

@@ -2206,7 +2206,7 @@
 
   $("tourBtn").onclick = () => { closeMenus(); window.Tour?.show(window.Shell?.route); };
   const menus = { sizeBtn: sizeMenu, exportBtn: $("exportMenu"), settingsBtn: $("settingsMenu"), designsBtn: $("designsMenu"), shareBtn: $("shareMenu"), looksBtn: $("looksMenu") };
-  const SCRIMMED = ["exportMenu", "designsMenu", "shareMenu", "cpExportMenu", "looksMenu"];
+  const SCRIMMED = ["exportMenu", "designsMenu", "shareMenu", "cpExportMenu", "looksMenu", "settingsMenu"];
   const syncScrim = () => document.body.classList.toggle("scrimmed", SCRIMMED.some((id) => $(id) && !$(id).hidden));
   window.syncScrim = syncScrim;
   function closeMenus() { Object.values(menus).forEach((m) => (m.hidden = true)); syncScrim(); }
@@ -2224,6 +2224,7 @@
     };
   }
   document.addEventListener("pointerdown", (e) => { if (!e.target.closest(".menu-wrap")) closeMenus(); });
+  $("settingsClose").onclick = (e) => { e.stopPropagation(); closeMenus(); };
   const openModal = (id) => { $(id).hidden = false; $(id).querySelector("button.primary")?.focus({ preventScroll: true }); };
   const closeModal = (id) => ($(id).hidden = true);
   for (const m of document.querySelectorAll(".modal")) m.addEventListener("pointerdown", (e) => { if (e.target === m) m.hidden = true; });
@@ -2266,9 +2267,9 @@
   $("unlockCancel").onclick = () => closeModal("unlockModal");
   $("unlockOk").onclick = () => { P.unlock = true; savePrefs(); $("unlock").checked = true; closeModal("unlockModal"); toast(P.safe ? "Extreme values on. Turn off Safe values to roll them too" : "Extreme values on"); };
   const settingsJSON = () => JSON.stringify({ app: "isoline", version: 5, appVersion: VERSION, settings: S }, null, 2);
-  $("exportSettings").onclick = () => { closeMenus(); download(new Blob([settingsJSON()], { type: "application/json" }), `isoline-settings-${S.seed}.json`, "Settings saved"); };
-  $("copySettings").onclick = async () => { closeMenus(); try { await navigator.clipboard.writeText(settingsJSON()); toast("Settings copied"); } catch (e) { toast("Clipboard blocked. Use Download"); } };
-  $("importSettings").onclick = () => { closeMenus(); $("importErr").hidden = true; $("importText").value = ""; openModal("importModal"); $("importText").focus(); };
+  if ($("exportSettings")) $("exportSettings").onclick = () => { closeMenus(); download(new Blob([settingsJSON()], { type: "application/json" }), `isoline-settings-${S.seed}.json`, "Settings saved"); };
+  if ($("copySettings")) $("copySettings").onclick = async () => { closeMenus(); try { await navigator.clipboard.writeText(settingsJSON()); toast("Settings copied"); } catch (e) { toast("Clipboard blocked. Use Download"); } };
+  if ($("importSettings")) $("importSettings").onclick = () => { closeMenus(); $("importErr").hidden = true; $("importText").value = ""; openModal("importModal"); $("importText").focus(); };
   // Feedback goes to a Google Form, opened with the type, title and note already filled in.
   const FORM = "https://docs.google.com/forms/d/e/1FAIpQLScQT4JNpqDqKx3q5KqXzHmD-OndI_lgFQfdY9edhzA_oTxlDA/viewform";
   const FORM_FIELDS = { kind: "entry.388241095", title: "entry.2015363973", body: "entry.928120778" };
