@@ -458,9 +458,11 @@
       { el: "#undo, #redo", view: ".app > .stage", t: "Undo and redo", p: "If you liked the look you had, you can always undo or redo.",
         tasks: [{ label: "Press Undo", click: "#undo" }, { label: "Press Redo", click: "#redo" }], ok: "Your keyboard's undo and redo shortcuts work here too." },
       { el: '[data-slot="motion"]', t: "Animating designs", p: "Any design you make can move, I'm tired of explaining this to people, so let's open [Motion], and pick an option to watch your canvas come to life!", media: "motion:drift",
-        tasks: [{ label: "Open the Motion layer", click: '[data-slot="motion"]', pre: () => shown("#motionType") }, { label: "Pick a motion", until: () => (root.Studio?.state?.().motion?.type || "still") !== "still", el: "#motionType", aim: '#motionType button:not(.on)', side: true }], ok: "Your canvas plays the motion now, and Export can save it as a video or GIF." },
+        tasks: [{ label: "Open the Motion layer", click: '[data-slot="motion"]', pre: () => shown("#motionType") }, { label: "Pick a motion", until: () => (root.Studio?.state?.().motion?.type || "still") !== "still", el: "#motionType", aim: '#motionType button:not(.on)', side: true }], ok: "Your canvas plays the motion now, and Export can save it as a video or GIF.",
+        hints: [{ el: "#art" }, { el: "#exportBtn" }] },
       { el: '[data-slot="addfx"]', t: "Stacking effects", p: "Effects sit on top of your design in the order you add them, from glass and blur to print textures, and some of them have special interactions with Motion and other Effects.", start: (c) => (c.fx0 = fxCount()),
-        tasks: [{ label: "Open Add effect", click: '[data-slot="addfx"]' }, { label: "Add any effect from the gallery", until: (c) => fxCount() > c.fx0, el: "#fxGallery", aim: "#fxGallery .fx-card", side: true }], ok: "Drag an effect tile up or down to change the order." },
+        tasks: [{ label: "Open Add effect", click: '[data-slot="addfx"]' }, { label: "Add any effect from the gallery", until: (c) => fxCount() > c.fx0, el: "#fxGallery", aim: "#fxGallery .fx-card", side: true }], ok: "Drag an effect tile up or down to change the order.",
+        hints: [{ el: "#fxTiles" }] },
       { el: "#wrap", t: "Canvas nodes", p: "You can drag points, objects and effect handles directly on the canvas, and the canvas itself can be resized by dragging the edges. {Click here} for a preset with handles.",
         action: () => root.Studio?.usePreset?.("Dusk"), start: watchCanvas,
         tasks: [{ label: "Drag a handle", until: (c) => c.dragged, need: hasHandles, why: "This design has none yet", el: "#art", aim: "#ov .pt, #ov .fc, #ov .ob" },
@@ -572,6 +574,7 @@
         if (!dock) { const tw = tip.offsetWidth, th = tip.offsetHeight; moveTip((innerWidth - tw) / 2, Math.max(m, (innerHeight - th) / 2), false); }
         const tb = tip.getBoundingClientRect();
         aim = st.hand ? [Math.min(innerWidth - 34, tb.right - 40), Math.max(34, tb.top - 30)] : null;
+        if (many.length) syncMany([], 0);
         setAway(null);
       } else {
         const tg = target(); el = document.querySelector(tg.el); r = boxOf(tg);
@@ -592,7 +595,8 @@
         const dir = split && !split.merging ? null : r.bottom < 10 ? "up" : r.top > floor - 10 ? "down" : null;
         setAway(dir);
         // Point at something you can actually press: the first visible match for the task inside the outline.
-        const hit = clickable(r, floor);
+        const hits = clickables(r, floor), hit = hits[0]?.b;
+        syncMany(!dir && !released && !(split && !split.merging) && !tip.classList.contains("done") ? hits.slice(1) : [], floor);
         aim = dir ? [Math.max(34, Math.min(wall - 34, r.left + r.width / 2)), dir === "up" ? 36 : floor - 36]
                   : hit ? [hit.left + hit.width / 2, Math.min(Math.max(hit.top + hit.height / 2, 14), floor - 14)]
                   : [r.left + r.width * 0.5, Math.min(Math.max(r.top + Math.min(r.height * 0.5, 40), 14), floor - 14)];
@@ -628,20 +632,37 @@
       const qx = Math.max(b.l, Math.min(b.l + b.w, S[0])), qy = Math.max(b.t, Math.min(b.t + b.h, S[1])), dx = S[0] - qx, dy = S[1] - qy, d = Math.hypot(dx, dy);
       return d < 1 ? [b.l + b.w / 2, b.t - 10] : [qx + (dx / d) * 9, qy + (dy / d) * 9];
     };
-    // A bowed path with one cursive loop in the middle, bulging the same way as the bow.
-    const swirlAt = (S, E, sg, t) => {
-      const dx = E[0] - S[0], dy = E[1] - S[1], d = Math.hypot(dx, dy) || 1, nx = (-dy / d) * sg, ny = (dx / d) * sg, bow = 0.2 * d;
-      const cx = (S[0] + E[0]) / 2 + nx * bow, cy = (S[1] + E[1]) / 2 + ny * bow, u = 1 - t;
-      let x = u * u * S[0] + 2 * u * t * cx + t * t * E[0], y = u * u * S[1] + 2 * u * t * cy + t * t * E[1];
-      const R = Math.min(20, d * 0.09), a = 0.3, b = 0.64;
-      if (R > 5 && t > a && t < b) {
-        const q = (t - a) / (b - a), sm = q * q * (3 - 2 * q), th0 = Math.atan2(-ny, -nx), dir = -Math.sign(-Math.sin(th0) * dx + Math.cos(th0) * dy) || 1, th = th0 + dir * Math.PI * 2 * sm;
-        x += R * (Math.cos(th) - Math.cos(th0)); y += R * (Math.sin(th) - Math.sin(th0));
-      }
-      return [x, y];
+    // A hand-drawn arrow: one smooth arc that bows outward onto the hint, with a single pen loop written into it
+    // early on. The loop is a stretch of prolate cycloid laid along the arc: the stroke keeps moving forward,
+    // rises, curls back over the top and comes down across itself, the way a hand writes a cursive "l", so it
+    // reads as one continuous stroke rather than a circle stuck on a line. `fan` bows each arrow of a group a little
+    // more than the last, and `lk` moves its loop along, so a group of arrows spreads apart.
+    const swirlAt = (S, E, sg, t, fan = 1, lk = 0) => {
+      const dx = E[0] - S[0], dy = E[1] - S[1], d = Math.hypot(dx, dy) || 1;
+      let nx = -dy / d, ny = dx / d;
+      if (ny > 0 || (Math.abs(ny) < 0.2 && nx * sg < 0)) { nx = -nx; ny = -ny; }
+      const bow = Math.min(0.3 * d, 200) * fan, R = Math.max(20, Math.min(38, d * 0.08)), loop = d > 170;
+      // Bow the other way when bowing up would carry the arrow off the top of the screen.
+      if (Math.min(S[1] + dy * 0.25 + ny * bow * 0.8, S[1] + dy * 0.8 + ny * bow * 0.55) - R * 2.5 < 12) { nx = -nx; ny = -ny; }
+      const c1x = S[0] + dx * 0.25 + nx * bow * 0.8, c1y = S[1] + dy * 0.25 + ny * bow * 0.8;
+      const c2x = S[0] + dx * 0.8 + nx * bow * 0.55, c2y = S[1] + dy * 0.8 + ny * bow * 0.55;
+      const base = (g) => { const u = 1 - g; return [u * u * u * S[0] + 3 * u * u * g * c1x + 3 * u * g * g * c2x + g * g * g * E[0], u * u * u * S[1] + 3 * u * u * g * c1y + 3 * u * g * g * c2y + g * g * g * E[1]]; };
+      // Loop shape: forward drift a per radian against radius b (b > a makes the loop), over one turn.
+      const b = R, a = R * 0.38, L = d * (1 + 0.6 * (bow / d) * (bow / d)), dg = loop ? Math.min(0.3, (2 * Math.PI * a) / L) : 0;
+      const ta = 0.3 + 0.05 * (lk - 1), tb = loop ? ta + 0.3 : ta, w = tb - ta, k = (1 - dg) / (1 - w);
+      // Time to arc position: steady outside the loop, and inside it the arc creeps forward by dg while the pen turns.
+      const g = !loop ? t : t <= ta ? t * k : t >= tb ? ta * k + dg + (t - tb) * k : ta * k + dg * ((t - ta) / w);
+      const [x, y] = base(g);
+      if (!loop || t <= ta || t >= tb) return [x, y];
+      const [px, py] = base(Math.min(1, g + 0.002)), vx = px - x, vy = py - y, vl = Math.hypot(vx, vy) || 1, tx = vx / vl, ty = vy / vl;
+      // The loop rises on the outer side of the arc.
+      let ox = -ty, oy = tx;
+      if (ox * nx + oy * ny < 0) { ox = -ox; oy = -oy; }
+      const th = -Math.PI + (2 * Math.PI * (t - ta)) / w, along = -b * 1.35 * Math.sin(th), up = b * (1 + Math.cos(th));
+      return [x + tx * along + ox * up, y + ty * along + oy * up];
     };
-    const trailD = (it, e) => { const n = Math.max(2, Math.ceil(56 * e)); let d = ""; for (let j = 0; j <= n; j++) { const [x, y] = swirlAt(it.S, it.E, it.sg, (e * j) / n); d += (j ? "L" : "M") + x.toFixed(1) + " " + y.toFixed(1); } return d; };
-    const headD = (it) => { const [x1, y1] = it.E, [x0, y0] = swirlAt(it.S, it.E, it.sg, 0.95), a = Math.atan2(y1 - y0, x1 - x0), L = 9, w = 0.52; return `M${(x1 - L * Math.cos(a - w)).toFixed(1)} ${(y1 - L * Math.sin(a - w)).toFixed(1)}L${x1.toFixed(1)} ${y1.toFixed(1)}L${(x1 - L * Math.cos(a + w)).toFixed(1)} ${(y1 - L * Math.sin(a + w)).toFixed(1)}`; };
+    const trailD = (it, e) => { const n = Math.max(2, Math.ceil(220 * e)); let d = ""; for (let j = 0; j <= n; j++) { const [x, y] = swirlAt(it.S, it.E, it.sg, (e * j) / n, it.fan, it.lk); d += (j ? "L" : "M") + x.toFixed(1) + " " + y.toFixed(1); } return d; };
+    const headD = (it) => { const [x1, y1] = it.E, [x0, y0] = swirlAt(it.S, it.E, it.sg, 0.95, it.fan, it.lk), a = Math.atan2(y1 - y0, x1 - x0), L = 9, w = 0.52; return `M${(x1 - L * Math.cos(a - w)).toFixed(1)} ${(y1 - L * Math.sin(a - w)).toFixed(1)}L${x1.toFixed(1)} ${y1.toFixed(1)}L${(x1 - L * Math.cos(a + w)).toFixed(1)} ${(y1 - L * Math.sin(a + w)).toFixed(1)}`; };
     function startSplit() {
       const st = s();
       if (!st.hints) return false;
@@ -658,20 +679,23 @@
       }
       if (!els.length) return false;
       const arrows = !docked() && !reduce.matches, P0 = cur.pos.slice(), from = { ...box }, tb = tip.getBoundingClientRect();
-      // An arrow that would start under the card starts at the card's edge instead, on the side facing its hint.
-      const startFor = (el) => {
-        const [x, y] = P0;
-        if (x < tb.left || x > tb.right || y < tb.top || y > tb.bottom) return P0;
-        const b = el.getBoundingClientRect(), dx = b.left + b.width / 2 - x, dy = b.top + b.height / 2 - y;
-        const k = Math.min(dx > 0 ? (tb.right - x) / dx : dx < 0 ? (tb.left - x) / dx : Infinity, dy > 0 ? (tb.bottom - y) / dy : dy < 0 ? (tb.top - y) / dy : Infinity), d = Math.hypot(dx, dy) || 1;
-        return [x + dx * k + (dx / d) * 10, y + dy * k + (dy / d) * 10];
+      // Arrows leave from the top edge of the card, spread along it toward their hints. A card near the top of the
+      // screen sends them from the side that faces the hints instead.
+      const fromSide = tb.top < 96, n0 = els.length, cxs = els.map((e) => { const b = e.getBoundingClientRect(); return b.left + b.width / 2; });
+      const leftward = cxs.reduce((x, c) => x + c, 0) / n0 < tb.left + tb.width / 2;
+      const startFor = (el, k) => {
+        if (fromSide) return [leftward ? tb.left - 6 : tb.right + 6, tb.top + Math.min(tb.height - 20, 28 + k * 22)];
+        const mid = tb.left + tb.width / 2, slot = (k - (n0 - 1) / 2) * 50;
+        return [Math.max(tb.left + 22, Math.min(tb.right - 22, mid + (leftward ? -1 : 1) * tb.width * 0.18 + slot)), tb.top - 6];
       };
       split = { arrows, t0: performance.now(), merging: null, items: els.map((el, k) => {
-        const S = arrows ? startFor(el) : P0;
+        const S = arrows ? startFor(el, k) : P0;
         let d = dot, ptr = cur;
         if (k) { d = document.createElement("div"); d.className = "tp tour-dot clone"; document.body.appendChild(d); ptr = pointer(d, 0.03, 0.5); ptr.place(P0[0], P0[1]); }
         const ring = document.createElementNS(NS, "rect"); ring.setAttribute("class", "tv-ring"); ring.style.opacity = 0; ringsG.appendChild(ring);
-        const it = { el, d, ptr, ring, from, box: { ...from }, sg: k % 2 ? -1 : 1, S, E: S, dur: 0 };
+        const it = { el, d, ptr, ring, from, box: { ...from }, sg: el.getBoundingClientRect().left + 20 < S[0] ? 1 : -1, S, E: S, dur: 0, fan: 1 + 0.35 * k, lk: k % 3 };
+        // Each pointer pops up at its arrow's start on the card's edge.
+        if (arrows) { ptr.place(S[0], S[1]); if (!reduce.matches) d.animate([{ scale: 0.3, opacity: 0 }, { scale: 1, opacity: 1 }], { duration: 260, easing: "cubic-bezier(.3,1.5,.5,1)" }); }
         if (arrows) {
           it.g = document.createElementNS(NS, "g"); it.g.setAttribute("class", "tv-trail");
           it.g.innerHTML = `<path class="tv-halo tv-ln"/><path class="tv-line tv-ln"/><path class="tv-halo tv-hd"/><path class="tv-line tv-hd"/>`;
@@ -706,11 +730,19 @@
         const t = Math.min(1, Math.max(0, (now - split.t0 - k * 140) / it.dur)), e = inOut(t), line = trailD(it, e), head = headD(it);
         for (const n of it.g.querySelectorAll(".tv-ln")) n.setAttribute("d", line);
         for (const n of it.g.querySelectorAll(".tv-hd")) n.setAttribute("d", head);
-        if (t < 1) { const [x, y] = swirlAt(it.S, it.E, it.sg, e); it.ptr.place(x, y); }
+        if (t < 1) { const [x, y] = swirlAt(it.S, it.E, it.sg, e, it.fan, it.lk); it.ptr.place(x, y); }
         else if (!it.sunk) { it.sunk = true; it.d.classList.add("sunk"); it.g.classList.add("head"); }
       });
       if (m && P >= 1) dropSplit();
       return holes;
+    }
+    // A finished step with nothing more to point at lets go: the outline, pointer and dim fade so the result shows.
+    let released = false;
+    function release(on) {
+      if (released === on) return;
+      released = on;
+      spotEl.classList.toggle("tour-split", on); dot.classList.toggle("sunk", on); veil.classList.toggle("released", on);
+      if (on) dropMany();
     }
     function mergeSplit() {
       if (!split || split.merging) return;
@@ -727,14 +759,39 @@
       }
       split = null; spotEl.classList.remove("tour-split"); dot.classList.remove("rest");
     }
-    function clickable(r, floor) {
-      const ts = s()?.tasks || [], t = nextTask() || ts[ts.length - 1], sel = t?.aim || t?.click;
-      if (!sel) return null;
+    // Everything you could press for the current task: the visible matches inside the outline, at most a dozen.
+    function clickables(r, floor) {
+      const ts = s()?.tasks || [], t = nextTask() || ts[ts.length - 1], sel = t?.aim || t?.click, out = [];
+      if (!sel) return out;
       for (const n of document.querySelectorAll(sel)) {
         const b = n.getBoundingClientRect();
-        if (b.width && b.height && b.bottom > 8 && b.top < floor - 8 && b.left >= r.left - 2 && b.right <= r.right + 2 && b.top >= r.top - 2 && b.bottom <= r.bottom + 2) return b;
+        if (b.width && b.height && b.bottom > 8 && b.top < floor - 8 && b.left >= r.left - 2 && b.right <= r.right + 2 && b.top >= r.top - 2 && b.bottom <= r.bottom + 2) out.push({ n, b });
+        if (out.length >= 12) break;
       }
-      return null;
+      return out;
+    }
+    // One extra pointer for every other thing you could press. They spring out of the main pointer and fade away
+    // once one of them is pressed; the pressed one hands its place to the main pointer, which plays the click.
+    const many = [];
+    const dropMany = (keep) => {
+      while (many.length) {
+        const m = many.pop(); m.ptr.stop();
+        if (m === keep) { m.d.remove(); continue; }
+        m.d.classList.add("gone"); const d = m.d; setTimeout(() => d.remove(), 320);
+      }
+    };
+    function syncMany(hits, floor) {
+      while (many.length > hits.length) { const m = many.pop(); m.ptr.stop(); m.d.classList.add("gone"); const d = m.d; setTimeout(() => d.remove(), 320); }
+      hits.forEach((h, k) => {
+        let m = many[k];
+        if (!m) {
+          const d = document.createElement("div"); d.className = "tp tour-dot clone" + (touch ? " touch" : ""); document.body.appendChild(d);
+          const ptr = pointer(d, 0.03, 0.5), [x, y] = cur.pos; ptr.place(x, y);
+          m = many[k] = { d, ptr };
+        }
+        m.n = h.n;
+        m.ptr.aim(h.b.left + h.b.width / 2, Math.min(Math.max(h.b.top + h.b.height / 2, 14), floor - 14));
+      });
     }
     function moveTip(x, y, fresh) {
       if (isNaN(tipAt.x)) { tipAt.x = x; tipAt.y = y; }
@@ -793,7 +850,13 @@
 
     // Feedback when something is done: the pointer pops (and on touch turns back into a cursor for a moment),
     // the check draws itself, and once the list is done a success line slides in while Next fills up as a countdown.
+    let lastDown = null;
+    const noteDown = (e) => (lastDown = e.target);
+    addEventListener("pointerdown", noteDown, true);
     const pop = () => {
+      const m = lastDown && many.find((x) => x.n === lastDown || x.n?.contains?.(lastDown));
+      if (m) { const [x, y] = m.ptr.pos; cur.place(x, y); }
+      dropMany(m);
       if (reduce.matches) return;
       cur.click();
       dot.animate([{ scale: 1 }, { scale: 1.45 }, { scale: 1 }], { duration: 420, easing: "cubic-bezier(.3,1.5,.5,1)" });
@@ -843,6 +906,8 @@
       tip.classList.add("done");
       setDesc(s().ok, true);
       let hinted = startSplit();
+      // Let the click animation play before letting go.
+      if (!hinted && !s().hints) { const at = i; setTimeout(() => { if (tour && i === at && tip.classList.contains("done")) release(true); }, 520); }
       // Hints off screen (the layer previews sit above the panel on a phone): scroll them into view, then split.
       if (!hinted && s().hints) {
         const h = document.querySelector(s().hints[0].el), at = i;
@@ -890,7 +955,7 @@
       if (busy || !tour) return;
       if (n >= STEPS.length) return finish();
       if (n < 0) return;
-      busy = true; off(); scrollStop?.(); mergeSplit();
+      busy = true; off(); scrollStop?.(); mergeSplit(); release(false);
       tip.classList.add("moving");
       await wait(i < 0 ? 0 : 200);
       if (!tour) return;
@@ -913,7 +978,7 @@
     };
     const cleanup = () => {
       alive = false; cancelAnimationFrame(raf);
-      off(); scrollStop?.(); dropSplit(); document.body.classList.remove("touring"); document.documentElement.classList.remove("tour-docked");
+      off(); scrollStop?.(); dropSplit(); dropMany(); removeEventListener("pointerdown", noteDown, true); document.body.classList.remove("touring"); document.documentElement.classList.remove("tour-docked");
       removeEventListener("keydown", key, true);
       tour = null;
       for (const n of [spotEl, tip, veil]) { n.classList.add("gone"); setTimeout(() => n.remove(), 320); }
